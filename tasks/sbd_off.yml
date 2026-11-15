@@ -1,0 +1,15 @@
+---
+- name: Read the services
+  ansible.builtin.service_facts:
+
+- name: SBD disabled
+  ansible.builtin.systemd_service:
+    name: sbd.service
+    enabled: false
+  when: (ansible_facts.services['sbd.service'] | default({})).status | default('not-found') != 'not-found'
+
+# sbd cannot stop alone while corosync runs (PartOf): it stops with the next stack restart
+- name: A running sbd stops with the next stack restart
+  ansible.builtin.debug:
+    msg: sbd is disabled; it still runs until corosync restarts on this node
+  when: (ansible_facts.services['sbd.service'] | default({})).state | default('') == 'running'

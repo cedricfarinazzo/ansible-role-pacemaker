@@ -1,0 +1,15 @@
+---
+- name: Packages are installed
+  ansible.builtin.apt:
+    name: "{{ pacemaker_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# pcsd rewrites corosync.conf and listens on TCP 2224; the pcs CLI stays for read-only "pcs status". systemctl,
+# not the module: the corosync role may have masked it first, and the module refuses to mask an absent unit
+- name: Mask pcsd  # noqa: command-instead-of-module
+  ansible.builtin.command: systemctl mask --now pcsd.service
+  args:
+    creates: /etc/systemd/system/pcsd.service
+  when: pacemaker_pcsd_masked

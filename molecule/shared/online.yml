@@ -1,0 +1,22 @@
+---
+# Tasks: every node online in a partition with quorum, no failed action; waits for the membership to settle.
+- name: Every node online, partition with quorum
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      check() {
+        m=$(crm_mon -1 2>&1) || return 1
+        grep -q 'partition with quorum' <<<"$m" || { why="no quorum"; return 1; }
+        online=$(sed -n 's/^ *\* Online: \[ \(.*\) \]$/\1/p; s/^Online: \[ \(.*\) \]$/\1/p' <<<"$m")
+        for n in {{ molecule_names | join(' ') }}; do
+          [[ " $online " == *" $n "* ]] || { why="$n not online: $online"; return 1; }
+        done
+      }
+      for i in $(seq 60); do check && break; sleep 2; done
+      check || { echo "FAIL: $why"; echo "$m"; exit 1; }
+      if grep -q 'Failed Resource Actions' <<<"$m"; then echo "FAIL: failed actions"; echo "$m"; exit 1; fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  vars:
+    molecule_names: "{{ groups['nodes'] | map('regex_replace', '^([^-]+-[^-]+)-.*$', '\\1') | list }}"

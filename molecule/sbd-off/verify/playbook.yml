@@ -1,0 +1,21 @@
+---
+- name: Verify
+  hosts: nodes
+  gather_facts: false
+  tasks:
+    - name: Every node online with quorum
+      ansible.builtin.include_tasks: ../../shared/online.yml
+
+    - name: No SBD, the properties set
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          fail() { echo "FAIL: $*"; exit 1; }
+          if dpkg-query -W -f '${Status}\n' sbd 2>/dev/null | grep -q 'ok installed'; then fail "sbd installed"; fi
+          [ ! -e /etc/default/sbd ] || fail "/etc/default/sbd written"
+          [ "$(crm_attribute --type crm_config --name no-quorum-policy --query --quiet)" = ignore ] || fail "no-quorum-policy"
+          [ "$(crm_attribute --type crm_config --name have-watchdog --query --quiet 2>/dev/null || echo false)" = false ] \
+            || fail "have-watchdog true without SBD"
+      args:
+        executable: /bin/bash
+      changed_when: false

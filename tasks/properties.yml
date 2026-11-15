@@ -1,0 +1,72 @@
+---
+# Cluster-wide: read, written and read back from one node (run_once). Only a value that differs is written, so a
+# rerun changes nothing. crm_attribute writes the local CIB, which Pacemaker replicates; pcs and pcsd are not used.
+- name: Wanted CIB values
+  ansible.builtin.set_fact:
+    __pacemaker_cib_wanted: >-
+      {% set w = [] %}{% for s in pacemaker_cib_sets %}{% for k, v in s.settings | dictsort %}{% set _ = w.append({
+        'type': s.type, 'name': k,
+        'value': none if v is none else (v | string | lower if v is boolean else v | string)}) %}{% endfor %}{% endfor %}{{ w }}
+  run_once: true
+
+- name: Read the CIB values
+  ansible.builtin.command:
+    argv:
+      - crm_attribute
+      - --type
+      - "{{ item.type }}"
+      - --name
+      - "{{ item.name }}"
+      - --query
+      - --quiet
+  loop: "{{ __pacemaker_cib_wanted }}"
+  loop_control:
+    label: "{{ item.type }} {{ item.name }}"
+  register: __pacemaker_cib_read
+  changed_when: false
+  # 105 (CRM_EX_NOSUCH), 6 on older Pacemaker: not set
+  failed_when: __pacemaker_cib_read.rc not in [0] + __pacemaker_unset_rc
+  check_mode: false
+  run_once: true
+  when: __pacemaker_started is not skipped
+
+- name: CIB values to change
+  ansible.builtin.set_fact:
+    __pacemaker_cib_changes: >-
+      {% set c = [] %}{% for r in __pacemaker_cib_read.results | default([]) if r is not skipped %}{% set cur =
+        r.stdout | trim if r.rc == 0 else none %}{% if cur != r.item.value %}{% set _ = c.append(r.item) %}{% endif
+      %}{% endfor %}{{ c }}
+  run_once: true
+
+- name: Write the CIB values that differ
+  ansible.builtin.command:
+    argv: >-
+      {{ ['crm_attribute', '--type', item.type, '--name', item.name]
+         + (['--delete'] if item.value is none else ['--update', item.value]) }}
+  loop: "{{ __pacemaker_cib_changes }}"
+  loop_control:
+    label: "{{ item.type }} {{ item.name }}={{ item.value }}"
+  changed_when: true
+  run_once: true
+
+- name: Read the written values back
+  ansible.builtin.command:
+    argv:
+      - crm_attribute
+      - --type
+      - "{{ item.type }}"
+      - --name
+      - "{{ item.name }}"
+      - --query
+      - --quiet
+  loop: "{{ __pacemaker_cib_changes }}"
+  loop_control:
+    label: "{{ item.type }} {{ item.name }}"
+  register: __pacemaker_cib_check
+  changed_when: false
+  failed_when: >-
+    (__pacemaker_cib_check.rc not in __pacemaker_unset_rc) if item.value is none
+    else (__pacemaker_cib_check.rc != 0 or __pacemaker_cib_check.stdout | trim != item.value)
+  check_mode: false
+  run_once: true
+  when: not ansible_check_mode

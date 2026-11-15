@@ -1,0 +1,115 @@
+---
+# Reruns from the control node: no change, check mode, a property changed and one deleted with a rerun that
+# changes nothing, then absent with Corosync left running.
+- name: Reruns
+  hosts: nodes
+  gather_facts: false
+  tasks:
+    - name: Rerun with no change
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: no change
+        molecule_args: []
+        molecule_expect: ok
+
+    - name: Nothing changed
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true
+
+    - name: Check mode on the converged cluster
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: check mode
+        molecule_args:
+          - --check
+        molecule_expect: ok
+
+    - name: Check mode changes nothing
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true
+
+    - name: A property changed, one deleted, a default added
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: properties
+        molecule_args:
+          - -e
+          - '{"pacemaker_cluster_properties": {"no-quorum-policy": "freeze", "cluster-recheck-interval": null, "stonith-enabled": false}, "pacemaker_resource_defaults": {"resource-stickiness": 100, "migration-threshold": 3}}'
+        molecule_expect: ok
+
+    - name: Written once, from one node
+      ansible.builtin.assert:
+        that:
+          - molecule_run.stdout | regex_findall('changed=1 ') | length == 1
+          - molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length - 1
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true
+
+    - name: The new values on every node
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          fail() { echo "FAIL: $*"; exit 1; }
+          q() { crm_attribute --type "$1" --name "$2" --query --quiet 2>/dev/null; }
+          [ "$(q crm_config no-quorum-policy)" = freeze ] || fail "no-quorum-policy not freeze"
+          if q crm_config cluster-recheck-interval; then fail "cluster-recheck-interval not deleted"; fi
+          [ "$(q rsc_defaults migration-threshold)" = 3 ] || fail "migration-threshold"
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: The same values again
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: properties again
+        molecule_args:
+          - -e
+          - '{"pacemaker_cluster_properties": {"no-quorum-policy": "freeze", "cluster-recheck-interval": null, "stonith-enabled": false}, "pacemaker_resource_defaults": {"resource-stickiness": 100, "migration-threshold": 3}}'
+        molecule_expect: ok
+
+    - name: The rerun changes nothing
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true
+
+    - name: State absent
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: absent
+        molecule_args:
+          - -e
+          - pacemaker_state=absent
+        molecule_expect: ok
+
+    - name: Nothing of Pacemaker left, Corosync still quorate
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          fail() { echo "FAIL: $*"; exit 1; }
+          if dpkg-query -W -f '${Status}\n' pacemaker pcs sbd 2>/dev/null | grep -q 'ok installed'; then fail "package left"; fi
+          for f in /etc/default/sbd /var/lib/pacemaker; do [ ! -e $f ] || fail "$f left"; done
+          if pgrep -x pacemakerd; then fail "pacemakerd runs"; fi
+          corosync-quorumtool -s | grep -qE '^Quorate: +Yes' || fail "corosync not quorate"
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Absent again
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: absent again
+        molecule_args:
+          - -e
+          - pacemaker_state=absent
+        molecule_expect: ok
+
+    - name: Absent twice changes nothing
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true

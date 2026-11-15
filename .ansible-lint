@@ -1,0 +1,13 @@
+---
+profile: production
+skip_list:
+  - yaml[line-length]  # long shell checks
+loop_var_prefix: "^(__|{role}_)"
+exclude_paths:
+  - .cache/
+  - .github/
+  - .venv/
+  - node_modules/
+# Task files the scenarios include, not playbooks
+kinds:
+  - tasks: "molecule/shared/{recap,online}.yml"

@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+{% if pacemaker_sbd_devices | length > 0 %}
+SBD_DEVICE="{{ pacemaker_sbd_devices | join(';') }}"
+{% endif %}
+SBD_PACEMAKER=yes
+SBD_WATCHDOG_DEV={{ pacemaker_sbd_watchdog_device }}
+SBD_WATCHDOG_TIMEOUT={{ pacemaker_sbd_watchdog_timeout }}
+{% for k, v in pacemaker_sbd_options | dictsort %}
+{{ k }}="{{ v | string | lower if v is boolean else v }}"
+{% endfor %}

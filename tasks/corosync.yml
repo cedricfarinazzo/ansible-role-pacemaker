@@ -1,0 +1,35 @@
+---
+# Pacemaker runs on Corosync's membership: every node of the play must run corosync and be quorate before any
+# package, service or CIB change. A node down or unreachable stops the role on every node: none writes the CIB.
+- name: Read corosync's state  # noqa: command-instead-of-module
+  ansible.builtin.shell:
+    cmd: >-
+      systemctl is-active corosync.service; corosync-quorumtool -s >/dev/null 2>&1; echo "quorum=$?";
+      systemctl cat corosync.service >/dev/null 2>&1 && echo unit
+  register: __pacemaker_corosync
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: This node's corosync state
+  ansible.builtin.set_fact:
+    __pacemaker_corosync_ok: >-
+      {{ __pacemaker_corosync.stdout_lines | first | default('') == 'active'
+         and 'quorum=0' in __pacemaker_corosync.stdout_lines }}
+    __pacemaker_corosync_unit: "{{ 'unit' in __pacemaker_corosync.stdout_lines }}"
+
+- name: Corosync is active and quorate on every node of the play
+  ansible.builtin.assert:
+    that: __pacemaker_corosync_down | length == 0
+    fail_msg: >-
+      corosync is not running or not quorate on {{ __pacemaker_corosync_down | join(', ') }}: Pacemaker needs a
+      running, quorate Corosync cluster on every node. Nothing was changed. Start corosync (or run the corosync role)
+      and run this role again
+    quiet: true
+  # Check mode before the corosync role ever ran: nothing to check yet
+  when: not (ansible_check_mode and not __pacemaker_corosync_unit)
+  vars:
+    __pacemaker_corosync_down: >-
+      {{ ansible_play_hosts_all | reject('in', ansible_play_hosts_all | map('extract', hostvars)
+         | selectattr('__pacemaker_corosync_ok', 'defined') | selectattr('__pacemaker_corosync_ok')
+         | map(attribute='inventory_hostname') | list) | list }}

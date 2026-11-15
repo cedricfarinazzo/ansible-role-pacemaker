@@ -1,0 +1,10 @@
+---
+# Test-only: the Molecule docker driver, and the corosync role every scenario builds the cluster with (its release tag)
+roles:
+  - name: cedricfarinazzo.corosync
+    src: https://github.com/cedricfarinazzo/ansible-role-corosync
+    scm: git
+    version: "1.0.0"
+collections:
+  - name: community.docker
+    version: "5.4.0"

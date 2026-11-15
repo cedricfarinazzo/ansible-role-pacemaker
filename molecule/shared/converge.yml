@@ -1,0 +1,8 @@
+---
+- name: Converge
+  hosts: nodes
+  roles:
+    # molecule_pacemaker_only: the failure paths run this role alone, so the corosync role starts nothing
+    - role: cedricfarinazzo.corosync
+      when: not (molecule_pacemaker_only | default(false) | bool)
+    - role: ../../../ansible-role-pacemaker

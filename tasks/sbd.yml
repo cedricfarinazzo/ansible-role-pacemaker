@@ -1,0 +1,113 @@
+---
+# The watchdog resets the node when SBD stops feeding it: a device another process holds (a watchdog daemon,
+# systemd's RuntimeWatchdogSec) would leave SBD unable to open it, so the role refuses before SBD starts.
+- name: Read the services
+  ansible.builtin.service_facts:
+
+# Check mode on a fresh host: the package, so the unit and the sbd command, is not there yet
+- name: Is SBD installed
+  ansible.builtin.set_fact:
+    __pacemaker_sbd_missing: >-
+      {{ (ansible_facts.services['sbd.service'] | default({})).status | default('not-found') == 'not-found' }}
+
+- name: Read the watchdog device
+  ansible.builtin.stat:
+    path: "{{ pacemaker_sbd_watchdog_device }}"
+    get_checksum: false
+    get_mime: false
+  register: __pacemaker_watchdog
+
+- name: The watchdog device exists
+  ansible.builtin.assert:
+    that: __pacemaker_watchdog.stat.exists and __pacemaker_watchdog.stat.ischr
+    fail_msg: >-
+      {{ pacemaker_sbd_watchdog_device }} is no watchdog character device: load the watchdog driver, or set
+      pacemaker_sbd_watchdog_device. SBD was not configured
+    quiet: true
+
+- name: Read the processes holding the watchdog device
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - for p in $(fuser "$1" 2>/dev/null); do echo "$(ps -o comm= -p "$p") ($p)"; done
+      - sh
+      - "{{ pacemaker_sbd_watchdog_device }}"
+  register: __pacemaker_watchdog_holders
+  changed_when: false
+  check_mode: false
+
+- name: No process other than sbd holds the watchdog device
+  ansible.builtin.assert:
+    that: __pacemaker_watchdog_others | length == 0
+    fail_msg: >-
+      {{ pacemaker_sbd_watchdog_device }} is held by {{ __pacemaker_watchdog_others | join(', ') }}: SBD must be the
+      only process feeding the watchdog. Stop that process (a watchdog daemon, systemd's RuntimeWatchdogSec) and run
+      the role again. SBD was not started
+    quiet: true
+  vars:
+    __pacemaker_watchdog_others: "{{ __pacemaker_watchdog_holders.stdout_lines | reject('match', '^sbd \\(') | list }}"
+
+# A disk SBD device needs its header (sbd -d <dev> create, which erases it): the role never writes one
+- name: Read the SBD devices' headers
+  ansible.builtin.command:
+    argv: >-
+      {% set a = ['sbd'] %}{% for d in pacemaker_sbd_devices %}{% set _ = a.extend(['-d', d]) %}{% endfor %}{{ a + ['dump'] }}
+  register: __pacemaker_sbd_dump
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: pacemaker_sbd_devices | length > 0 and not (ansible_check_mode and __pacemaker_sbd_missing)
+
+- name: The SBD devices are initialised
+  ansible.builtin.assert:
+    that: __pacemaker_sbd_dump.rc == 0
+    fail_msg: >-
+      SBD devices {{ pacemaker_sbd_devices | join(', ') }} have no readable SBD header: initialise them once with
+      sbd -d <device> create (it erases the device). SBD was not configured
+    quiet: true
+  when: __pacemaker_sbd_dump is not skipped
+
+- name: SBD configuration
+  ansible.builtin.template:
+    src: sbd.j2
+    dest: "{{ pacemaker_sbd_config }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: __pacemaker_sbd_conf
+
+- name: SBD enabled with corosync
+  ansible.builtin.systemd_service:
+    name: sbd.service
+    enabled: "{{ pacemaker_sbd_service }}"
+  when: not (ansible_check_mode and __pacemaker_sbd_missing)
+
+# sbd starts with corosync (PartOf, RequiredBy) and Pacemaker reads have-watchdog at its start: a new or changed
+# SBD configuration restarts the whole stack, one node at a time, each node back in a quorate partition first
+- name: Restart the cluster stack on the SBD configuration, one node at a time
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - |
+        systemctl restart corosync.service || exit 1
+        systemctl start pacemaker.service || exit 1
+        if systemctl cat corosync-qdevice.service >/dev/null 2>&1 && systemctl is-enabled -q corosync-qdevice.service; then
+          systemctl start corosync-qdevice.service || exit 1
+        fi
+        i=0
+        while [ "$i" -lt "$1" ]; do
+          systemctl is-active -q sbd.service && crm_mon -1 2>/dev/null | grep -q 'partition with quorum' \
+            && crm_node -q 2>/dev/null | grep -qx 1 && exit 0
+          sleep 2; i=$((i + 2))
+        done
+        echo "not back in a quorate partition with sbd running after $1 s"; exit 1
+      - sh
+      - "{{ pacemaker_join_timeout }}"
+  throttle: 1
+  changed_when: true
+  when:
+    - pacemaker_sbd_service
+    - not ansible_check_mode
+    - __pacemaker_sbd_conf is changed or (ansible_facts.services['sbd.service'] | default({})).state | default('') != 'running'
