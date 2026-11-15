@@ -16,6 +16,9 @@ pacemaker_sbd_service: true
 pacemaker_sbd_watchdog_device: /dev/watchdog
 # Seconds: a node that stops feeding the watchdog resets after this
 pacemaker_sbd_watchdog_timeout: 5
+# Allow the role to restart the cluster stack (corosync, pacemaker, sbd) on every node, one at a time, when SBD is new
+# or changed: resources on a node stop while it restarts. false refuses before any change instead
+pacemaker_allow_restart: false
 # Shared block devices; [] is diskless SBD (watchdog only, needs quorum: three votes or a quorum device)
 pacemaker_sbd_devices: []
 # Other /etc/default/sbd settings, e.g. {SBD_STARTMODE: clean}

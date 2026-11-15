@@ -10,13 +10,14 @@ Public Ansible role `cedricfarinazzo.pacemaker` (Ansible Galaxy): Pacemaker on a
 
 - `defaults/main.yml` — every user-facing variable (`pacemaker_*`), with its generic default.
 - `vars/main.yml` — package list, `/etc/default/sbd` path, the CIB sections and their inputs, crm_attribute's "not set" exit codes.
-- `tasks/main.yml` — `validate.yml` (every input), then for `present`: `corosync.yml` (corosync active and quorate on every play host, before any change), `install.yml` (packages, `pcsd` masked), `sbd.yml` (watchdog checks, device headers, `/etc/default/sbd`, rolling stack restart) or `sbd_off.yml`, `service.yml` (pacemaker running, every node online), `properties.yml` (read, write the differences, read back; run_once); for `absent`: `absent.yml`.
+- `tasks/main.yml` — `validate.yml` (every input), then for `present`: `corosync.yml` (corosync active and quorate on every play host, before any change), `install.yml` (packages, `pcsd` masked), `restart_check.yml` (a stack restart refused on every node unless `pacemaker_allow_restart`, before any package), `sbd.yml` (watchdog checks, device headers, `/etc/default/sbd`, rolling stack restart) or `sbd_off.yml`, `service.yml` (pacemaker running, every node online), `properties.yml` (read, write the differences, read back; run_once); for `absent`: `absent.yml`.
 - `templates/sbd.j2` — `/etc/default/sbd`.
 - `meta/main.yml` — Galaxy metadata; `platforms` lists exactly what CI tests.
 - `molecule/shared/` — `collections.yml` (the docker driver and the corosync role's release tag), `prepare.yml` (policy-rc.d removed, a stand-in watchdog character device, qnetd on the `qnetd` group), `converge.yml` (corosync role, then this one), `run.sh` and `recap.yml` (a rerun from the control node, its recap checked), `online.yml`.
 - `molecule/default/` — three nodes, every distribution; reruns: no change, check mode, properties changed and deleted, absent twice.
 - `molecule/qdevice/` — two nodes and a qnetd host; a node down and back.
 - `molecule/sbd-off/` — no SBD; SBD on config-only and off again.
+- `molecule/sbd-service/` — sbd running on a stand-in device: restart opt-in, timeouts, have-watchdog, one-node-at-a-time restart.
 - `molecule/failure/` — failure paths on a two-node cluster, then verify nothing changed.
 - `tests/validate.test.sh` — good and bad inputs against `tasks/validate.yml` on localhost.
 - `run-tests.sh` / `Makefile` — local Molecule entry points; several distros or `all` run in parallel, one log each in `.molecule-logs/`.
@@ -32,6 +33,8 @@ Public Ansible role `cedricfarinazzo.pacemaker` (Ansible Galaxy): Pacemaker on a
 - **No ruleset or branch protection on `main`:** a ruleset blocks semantic-release. Changes still go through a PR with green CI.
 - **Variables:** every user-facing variable starts with `pacemaker_`, is defined in `defaults/main.yml`, asserted in `tasks/validate.yml` (with a case in `tests/validate.test.sh`) and documented in `README.md` in the same PR. Internal facts start with `__pacemaker_`.
 - **Every input checked before any change.** Every regex ends in `\Z`, never `$`; classes hold no control character; bad cases feed trailing and embedded newlines.
+- **No stack restart without `pacemaker_allow_restart`;** refused on every node before any package or file changes.
+- **Fencing timeouts checked in `validate.yml`:** `stonith-watchdog-timeout` at least twice the SBD timeout, `stonith-timeout` longer.
 - **No change before Corosync is checked on every node:** a node down or unreachable stops the role everywhere, so no node writes the CIB.
 - **CIB writes are run_once and only for values that differ;** each is read back. No `pcs` command that needs `pcsd`.
 - **The role never writes an SBD device header** (`sbd create` erases the device).
@@ -62,7 +65,7 @@ Public Ansible role `cedricfarinazzo.pacemaker` (Ansible Galaxy): Pacemaker on a
 - `sbd.service` is PartOf corosync: it stops only with corosync, and Pacemaker reads `have-watchdog` at its start, so an SBD change restarts the whole stack (one node at a time, `throttle: 1`).
 - `crm_attribute --query` of an unset value exits 105 (CRM_EX_NOSUCH; 6 on older Pacemaker): both mean "not set".
 - `item.values` in Jinja is the dict method, not a key: the CIB set's key is `settings`.
-- A container has no watchdog: the scenarios use `pacemaker_sbd_service: false` on a `mknod` character device.
+- A container has no watchdog: `sbd` runs on a `mknod` character device (`/dev/null`'s numbers) with `sbd-service`; the other scenarios use `pacemaker_sbd_service: false`.
 - Docker's 64 MB `/dev/shm` fills with corosync's and pacemaker's libqb buffers ("Cannot initialise VOTEQUORUM service", "No space left on device" in corosync's journal): every platform sets `shm_size: 512m`.
 
 ## Self Improvement Loop

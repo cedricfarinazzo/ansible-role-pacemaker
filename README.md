@@ -35,7 +35,7 @@ The role will:
 - ✅ Check that corosync runs and is quorate on every node of the play, before any package, service or CIB change: one node down or unreachable stops the role on every node, with nothing changed
 - ✅ Install `pacemaker`, `pacemaker-cli-utils`, `pcs`, `psmisc` (and `sbd`), mask `pcsd` (nothing listens on TCP 2224)
 - ✅ With SBD: refuse a watchdog path that is no character device, or that a process other than `sbd` holds (the message names it); refuse SBD devices without an SBD header; write `/etc/default/sbd`; enable `sbd` with corosync
-- ✅ Restart the cluster stack on a new or changed SBD configuration, one node at a time, each back in a quorate partition with `sbd` running before the next (Pacemaker reads `have-watchdog` at its start)
+- ✅ Refuse, before any change, a new or changed SBD configuration (it restarts the stack, and a node's resources stop while it restarts) unless `pacemaker_allow_restart: true`; with it, restart the stack on every node, one node at a time, each back in a quorate partition with `sbd` running before the next (Pacemaker reads `have-watchdog` at its start)
 - ✅ Start Pacemaker and wait until every node of the play, by its name in the running membership (`crm_node -n`), is online in a partition with quorum
 - ✅ Read each wanted CIB value with `crm_attribute`, write only those that differ (a rerun changes nothing), from one node, and read them back
 
@@ -65,6 +65,7 @@ pacemaker_pcsd_masked: true                  # false leaves pcsd as its package 
 
 pacemaker_sbd: true                          # false: no SBD (fence agents instead)
 pacemaker_sbd_service: true                  # false: /etc/default/sbd written, sbd.service disabled
+pacemaker_allow_restart: false               # true: restart corosync, pacemaker and sbd, one node at a time, when SBD is new or changed
 pacemaker_sbd_watchdog_device: /dev/watchdog # a character device
 pacemaker_sbd_watchdog_timeout: 5            # seconds, 1-9999
 pacemaker_sbd_devices: []                    # up to 3 shared block devices; [] is diskless
@@ -80,9 +81,9 @@ Names are `[A-Za-z][A-Za-z0-9_-]*`; values printable, 1-255 characters; booleans
 
 ### Diskless SBD
 
-With `pacemaker_sbd_devices: []`, a node that loses quorum stops feeding the watchdog and resets after `pacemaker_sbd_watchdog_timeout`; the others consider it fenced after `stonith-watchdog-timeout`. Set that property to at least twice the watchdog timeout. The role refuses `stonith-watchdog-timeout` unless `pacemaker_sbd` and `pacemaker_sbd_service` are true with no devices: Pacemaker's controller exits when it is set and SBD does not run.
+With `pacemaker_sbd_devices: []`, a node that loses quorum stops feeding the watchdog and resets after `pacemaker_sbd_watchdog_timeout`; the others consider it fenced after `stonith-watchdog-timeout`. The role refuses `stonith-watchdog-timeout` under twice `pacemaker_sbd_watchdog_timeout` (`-1` lets Pacemaker take twice), and refuses it without an explicit `stonith-timeout` longer than it (Pacemaker's default of 60 s may be shorter); both in seconds, before any change. Raising `pacemaker_sbd_watchdog_timeout` above a `stonith-watchdog-timeout` already in the CIB: raise the property in a run of its own first. The role refuses `stonith-watchdog-timeout` unless `pacemaker_sbd` and `pacemaker_sbd_service` are true with no devices: Pacemaker's controller exits when it is set and SBD does not run.
 
-On a first run SBD is enabled and the stack restarted before the properties are written, so both land in one run.
+On a first run, with `pacemaker_allow_restart: true`, SBD is enabled and the stack restarted before the properties are written, so both land in one run.
 
 ### SBD with devices
 
@@ -106,9 +107,10 @@ tests/validate.test.sh             # the input checks
 | `default` | Three nodes: check mode, idempotence, properties and defaults written lower case and read back on every node, a change and a delete written once, absent twice with Corosync still quorate |
 | `qdevice` | Two nodes and a qnetd host: a node down leaves the other quorate, the rerun changes nothing |
 | `sbd-off` | No SBD package or file, `have-watchdog` false; SBD turned on config-only, then off |
+| `sbd-service` | Three nodes, sbd really running on a stand-in character device: the opt-in refused without `pacemaker_allow_restart` with nothing changed, timeouts that do not fit refused, `have-watchdog` true, a changed SBD timeout restarted one node at a time, `pcsd` left alone, an extra package, check mode and reruns change nothing |
 | `failure` | A control character, a missing watchdog, a watchdog held by another process (named), an SBD device without a header, corosync stopped on one node: each fails with its message, no property and no SBD file changed |
 
-A container has no watchdog: the scenarios run SBD config-only (`pacemaker_sbd_service: false`) on a stand-in character device. The stack restart on SBD, and the reset itself, are only proven on hosts.
+A container has no watchdog: `sbd` runs on a stand-in character device that never resets the node, and the other scenarios run SBD config-only (`pacemaker_sbd_service: false`). The reset itself is only proven on hosts.
 
 ## 📄 License
 

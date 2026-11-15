@@ -1,0 +1,35 @@
+---
+# One node of the roll; skipped once an earlier node failed. Not a module error: the failure is recorded, and the
+# assert in sbd.yml names the node after the loop.
+- name: Restart corosync, pacemaker and the qdevice, wait for sbd and a quorate partition
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - |
+        systemctl restart corosync.service || exit 1
+        systemctl start pacemaker.service || exit 1
+        if systemctl cat corosync-qdevice.service >/dev/null 2>&1 && systemctl is-enabled -q corosync-qdevice.service; then
+          systemctl start corosync-qdevice.service || exit 1
+        fi
+        i=0
+        while [ "$i" -lt "$1" ]; do
+          systemctl is-active -q sbd.service && crm_mon -1 2>/dev/null | grep -q 'partition with quorum' \
+            && crm_node -q 2>/dev/null | grep -qx 1 && exit 0
+          sleep 2; i=$((i + 2))
+        done
+        echo "not back in a quorate partition with sbd running after $1 s"; exit 1
+      - sh
+      - "{{ pacemaker_join_timeout }}"
+  delegate_to: "{{ __pacemaker_node }}"
+  register: __pacemaker_restart
+  changed_when: __pacemaker_restart.rc == 0
+  failed_when: false
+  run_once: true
+  when: __pacemaker_restart_failed | length == 0
+
+- name: Remember the node that failed
+  ansible.builtin.set_fact:
+    __pacemaker_restart_failed: "{{ __pacemaker_node }}: {{ (__pacemaker_restart.stdout ~ ' ' ~ __pacemaker_restart.stderr) | trim }}"
+  when: __pacemaker_restart is not skipped and __pacemaker_restart.rc != 0
+  run_once: true
