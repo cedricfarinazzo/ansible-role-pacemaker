@@ -1,0 +1,66 @@
+---
+# Every input checked before any change. Every regex ends in \Z (a $ lets a trailing newline through) and its
+# classes hold no control character: a value reaches /etc/default/sbd or a crm_attribute argument.
+- name: Settings are sound
+  ansible.builtin.assert:
+    that:
+      - pacemaker_state in ['present', 'absent']
+      - pacemaker_packages_extra is sequence and pacemaker_packages_extra is not string
+      - pacemaker_packages_extra is not mapping
+      - pacemaker_packages_extra | map('string') | reject('match', '^[a-z0-9][a-z0-9.+-]+\Z') | list | length == 0
+      - pacemaker_pcsd_masked is boolean
+      - pacemaker_sbd is boolean and pacemaker_sbd_service is boolean
+      - pacemaker_join_timeout | string is match('^[1-9][0-9]{0,4}\Z')
+    fail_msg: >-
+      pacemaker_state present|absent; pacemaker_packages_extra a list of package names; pacemaker_pcsd_masked,
+      pacemaker_sbd, pacemaker_sbd_service booleans; pacemaker_join_timeout seconds, 1-99999
+    quiet: true
+
+- name: SBD settings are sound
+  ansible.builtin.assert:
+    that:
+      - pacemaker_sbd_watchdog_device is string and pacemaker_sbd_watchdog_device is match('^/[A-Za-z0-9._/-]+\Z')
+      - pacemaker_sbd_watchdog_timeout | string is match('^[1-9][0-9]{0,3}\Z')
+      - pacemaker_sbd_devices is sequence and pacemaker_sbd_devices is not string and pacemaker_sbd_devices is not mapping
+      - pacemaker_sbd_devices | length <= 3
+      - pacemaker_sbd_devices | map('string') | reject('match', '^/[A-Za-z0-9._:/-]+\Z') | list | length == 0
+      - pacemaker_sbd_options is mapping
+      - pacemaker_sbd_options.keys() | map('string') | reject('match', '^SBD_[A-Z0-9_]+\Z') | list | length == 0
+      # Owned by the inputs above
+      - pacemaker_sbd_options.keys() | intersect(['SBD_WATCHDOG_DEV', 'SBD_WATCHDOG_TIMEOUT', 'SBD_DEVICE']) | length == 0
+      - pacemaker_sbd_options.values() | map('string') | reject('match', '^[ -~]{0,255}\Z') | list | length == 0
+      - pacemaker_sbd_options.values() | map('string') | select('search', '["\\\\`$]') | list | length == 0
+    fail_msg: >-
+      pacemaker_sbd_watchdog_device an absolute path; pacemaker_sbd_watchdog_timeout seconds, 1-9999;
+      pacemaker_sbd_devices up to 3 absolute paths; pacemaker_sbd_options a map of SBD_* names (not SBD_WATCHDOG_DEV,
+      SBD_WATCHDOG_TIMEOUT or SBD_DEVICE) to printable values without quotes, backslashes, backticks or $
+    quiet: true
+  when: pacemaker_state == 'present' and pacemaker_sbd
+
+- name: CIB values are sound
+  ansible.builtin.assert:
+    that:
+      - item.settings is mapping
+      - item.settings.keys() | map('string') | reject('match', '^[A-Za-z][A-Za-z0-9_-]{0,63}\Z') | list | length == 0
+      - item.settings.values() | reject('none') | map('string') | reject('match', '^[ -~]{1,255}\Z') | list | length == 0
+    fail_msg: >-
+      pacemaker_cluster_properties, pacemaker_resource_defaults and pacemaker_op_defaults: maps of names
+      ([A-Za-z][A-Za-z0-9_-]*) to printable values of 1-255 characters, or null to delete ({{ item.type }})
+    quiet: true
+  loop: "{{ pacemaker_cib_sets }}"
+  loop_control:
+    label: "{{ item.type }}"
+  when: pacemaker_state == 'present'
+
+# Pacemaker's controller exits when stonith-watchdog-timeout is set and SBD does not run
+- name: A watchdog timeout needs SBD running
+  ansible.builtin.assert:
+    that: >-
+      pacemaker_cluster_properties['stonith-watchdog-timeout'] | default(none) is none
+      or pacemaker_cluster_properties['stonith-watchdog-timeout'] | string in ['0', '0s']
+      or (pacemaker_sbd and pacemaker_sbd_service and pacemaker_sbd_devices | length == 0)
+    fail_msg: >-
+      stonith-watchdog-timeout is for diskless SBD: it needs pacemaker_sbd and pacemaker_sbd_service true and no
+      pacemaker_sbd_devices; Pacemaker's controller exits when it is set and SBD does not run
+    quiet: true
+  when: pacemaker_state == 'present'

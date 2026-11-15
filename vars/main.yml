@@ -1,0 +1,15 @@
+---
+pacemaker_packages: >-
+  {{ ['pacemaker', 'pacemaker-cli-utils', 'pcs', 'psmisc'] + (['sbd'] if pacemaker_sbd else []) + pacemaker_packages_extra }}
+pacemaker_sbd_config: /etc/default/sbd
+# The CIB sections crm_attribute writes, and the role's inputs for each
+pacemaker_cib_sets:
+  - type: crm_config
+    settings: "{{ pacemaker_cluster_properties }}"
+  - type: rsc_defaults
+    settings: "{{ pacemaker_resource_defaults }}"
+  - type: op_defaults
+    settings: "{{ pacemaker_op_defaults }}"
+__pacemaker_unset_rc:
+  - 6
+  - 105

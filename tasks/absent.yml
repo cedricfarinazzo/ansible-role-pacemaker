@@ -1,0 +1,44 @@
+---
+# Removes Pacemaker and SBD only: Corosync and the pcsd mask belong to whoever set them up
+# A purged unit stays in service_facts until systemd forgets it: the packages say what is installed
+- name: Read the services
+  ansible.builtin.service_facts:
+
+- name: Read the packages
+  ansible.builtin.package_facts:
+
+- name: Pacemaker stopped and disabled
+  ansible.builtin.systemd_service:
+    name: pacemaker.service
+    enabled: false
+    state: stopped
+  when: "'pacemaker' in ansible_facts.packages"
+
+- name: SBD disabled
+  ansible.builtin.systemd_service:
+    name: sbd.service
+    enabled: false
+  when: "'sbd' in ansible_facts.packages"
+
+# sbd stops only with corosync (PartOf), and a killed sbd lets the watchdog reset the node: corosync is stopped
+# cleanly first, and stays stopped
+- name: Corosync stopped to stop a running sbd
+  ansible.builtin.systemd_service:
+    name: corosync.service
+    state: stopped
+  when: "'sbd' in ansible_facts.packages and (ansible_facts.services['sbd.service'] | default({})).state | default('') == 'running'"
+
+- name: Packages purged
+  ansible.builtin.apt:
+    name: "{{ ['pacemaker', 'pacemaker-cli-utils', 'pcs', 'sbd'] + pacemaker_packages_extra }}"
+    state: absent
+    purge: true
+
+- name: CIB, SBD configuration and logs removed
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ pacemaker_sbd_config }}"
+    - /var/lib/pacemaker
+    - /var/log/pacemaker

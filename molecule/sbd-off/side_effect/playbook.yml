@@ -1,0 +1,44 @@
+---
+# SBD turned on later, config-only: the package and its file arrive, the service stays disabled; then off again.
+- name: SBD on and off
+  hosts: nodes
+  gather_facts: false
+  tasks:
+    - name: SBD on, config only
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: sbd on
+        molecule_args:
+          - -e
+          - '{"pacemaker_sbd": true, "pacemaker_sbd_service": false, "pacemaker_sbd_watchdog_device": "/dev/molecule-watchdog"}'
+        molecule_expect: ok
+
+    - name: SBD configured and disabled
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          grep -qx 'SBD_WATCHDOG_DEV=/dev/molecule-watchdog' /etc/default/sbd || { echo "FAIL: no config"; exit 1; }
+          [ "$(systemctl is-enabled sbd.service)" = disabled ] || { echo "FAIL: sbd enabled"; exit 1; }
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: SBD off again
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: sbd off
+        molecule_args: []
+        molecule_expect: ok
+
+    - name: Rerun with no change
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: no change
+        molecule_args: []
+        molecule_expect: ok
+
+    - name: Nothing changed
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true

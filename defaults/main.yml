@@ -1,0 +1,32 @@
+---
+# present: install and run Pacemaker (and SBD) on a running Corosync cluster; absent: stop, purge, remove CIB and config
+pacemaker_state: present
+
+# Extra packages, e.g. resource agents or fence agents
+pacemaker_packages_extra: []
+
+# pcsd rewrites corosync.conf and listens on TCP 2224: masked; false leaves it as its package set it
+pacemaker_pcsd_masked: true
+
+# SBD watchdog fencing; false skips SBD (a cluster fenced by fence agents)
+pacemaker_sbd: true
+# false writes /etc/default/sbd and leaves sbd.service disabled (a container, or a host without a watchdog yet)
+pacemaker_sbd_service: true
+# The watchdog SBD opens: a character device no other process holds
+pacemaker_sbd_watchdog_device: /dev/watchdog
+# Seconds: a node that stops feeding the watchdog resets after this
+pacemaker_sbd_watchdog_timeout: 5
+# Shared block devices; [] is diskless SBD (watchdog only, needs quorum: three votes or a quorum device)
+pacemaker_sbd_devices: []
+# Other /etc/default/sbd settings, e.g. {SBD_STARTMODE: clean}
+pacemaker_sbd_options: {}
+
+# crm_config properties, set once from one node, e.g. {stonith-watchdog-timeout: 10, no-quorum-policy: stop};
+# a null value deletes the property
+pacemaker_cluster_properties: {}
+# rsc_defaults and op_defaults, the same way
+pacemaker_resource_defaults: {}
+pacemaker_op_defaults: {}
+
+# Seconds to wait for a node to rejoin after a stack restart, and for every node to be online
+pacemaker_join_timeout: 120

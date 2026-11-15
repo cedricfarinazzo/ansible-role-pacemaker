@@ -1,0 +1,49 @@
+---
+# Two nodes and a qdevice: a node stopped leaves the other quorate on the qdevice's vote, and the role's rerun
+# with every node back changes nothing.
+- name: One node down and back
+  hosts: nodes
+  gather_facts: false
+  tasks:
+    - name: Stop the cluster stack on the second node
+      ansible.builtin.systemd_service:
+        name: corosync.service
+        state: stopped
+      when: inventory_hostname == groups['nodes'][1]
+
+    - name: The first node keeps quorum with the qdevice's vote
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          for i in $(seq 30); do crm_mon -1 2>/dev/null | grep -q 'partition with quorum' && exit 0; sleep 2; done
+          crm_mon -1; exit 1
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: inventory_hostname == groups['nodes'][0]
+
+    - name: Start it again
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: started
+      loop:
+        - corosync.service
+        - corosync-qdevice.service
+        - pacemaker.service
+      when: inventory_hostname == groups['nodes'][1]
+
+    - name: Every node online again
+      ansible.builtin.include_tasks: ../../shared/online.yml
+
+    - name: Rerun with no change
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: no change
+        molecule_args: []
+        molecule_expect: ok
+
+    - name: Nothing changed
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true

@@ -1,0 +1,31 @@
+---
+- name: Validate inputs
+  ansible.builtin.import_tasks: validate.yml
+
+- name: Pacemaker
+  when: pacemaker_state == 'present'
+  block:
+    # Before any package: installing pacemaker would start corosync on a node where it is stopped
+    - name: Corosync runs and is quorate on every node
+      ansible.builtin.include_tasks: corosync.yml
+
+    - name: Packages
+      ansible.builtin.include_tasks: install.yml
+
+    - name: SBD
+      ansible.builtin.include_tasks: sbd.yml
+      when: pacemaker_sbd
+
+    - name: SBD off
+      ansible.builtin.include_tasks: sbd_off.yml
+      when: not pacemaker_sbd
+
+    - name: Pacemaker service and membership
+      ansible.builtin.include_tasks: service.yml
+
+    - name: Cluster properties and defaults
+      ansible.builtin.include_tasks: properties.yml
+
+- name: Remove Pacemaker
+  ansible.builtin.include_tasks: absent.yml
+  when: pacemaker_state == 'absent'

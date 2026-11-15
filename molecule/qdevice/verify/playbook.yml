@@ -1,0 +1,50 @@
+---
+- name: Verify
+  hosts: nodes
+  gather_facts: false
+  tasks:
+    - name: Every node online with quorum
+      ansible.builtin.include_tasks: ../../shared/online.yml
+
+    - name: The CIB values, read on every node
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          fail() { echo "FAIL: $*"; exit 1; }
+          q() { crm_attribute --type "$1" --name "$2" --query --quiet; }
+          [ "$(q crm_config no-quorum-policy)" = stop ] || fail "no-quorum-policy: $(q crm_config no-quorum-policy)"
+          [ "$(q crm_config cluster-recheck-interval)" = 5min ] || fail "cluster-recheck-interval"
+          [ "$(q crm_config stonith-enabled)" = false ] || fail "stonith-enabled: a boolean must be written lower case"
+          [ "$(q rsc_defaults resource-stickiness)" = 100 ] || fail "resource-stickiness"
+          [ "$(q op_defaults timeout)" = 60s ] || fail "op timeout"
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: SBD configured, not started (config-only), pcsd masked, nothing on TCP 2224
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          fail() { echo "FAIL: $*"; exit 1; }
+          grep -qx 'SBD_WATCHDOG_DEV=/dev/molecule-watchdog' /etc/default/sbd || fail "SBD_WATCHDOG_DEV"
+          grep -qx 'SBD_WATCHDOG_TIMEOUT=15' /etc/default/sbd || fail "SBD_WATCHDOG_TIMEOUT"
+          grep -qx 'SBD_STARTMODE="clean"' /etc/default/sbd || fail "SBD_STARTMODE"
+          if grep -q '^SBD_DEVICE' /etc/default/sbd; then fail "SBD_DEVICE set for diskless"; fi
+          [ "$(systemctl is-enabled sbd.service)" = disabled ] || fail "sbd enabled in config-only mode"
+          [ "$(systemctl is-enabled pcsd.service 2>&1)" = masked ] || fail "pcsd: $(systemctl is-enabled pcsd.service 2>&1)"
+          if ss -ltnH 'sport = :2224' | grep -q .; then fail "something listens on 2224"; fi
+          [ "$(systemctl is-enabled pacemaker.service)" = enabled ] || fail "pacemaker not enabled"
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: The quorum device is the third vote
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          q=$(corosync-quorumtool -s)
+          grep -qE '^Flags: +Quorate Qdevice' <<<"$q" || { echo "FAIL: no Qdevice flag"; echo "$q"; exit 1; }
+          grep -qE '^Total votes: +3$' <<<"$q" || { echo "FAIL: votes"; echo "$q"; exit 1; }
+      args:
+        executable: /bin/bash
+      changed_when: false

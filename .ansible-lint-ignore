@@ -1,0 +1,2 @@
+# Molecule playbooks name the role under test by its path
+molecule/shared/converge.yml role-name[path]

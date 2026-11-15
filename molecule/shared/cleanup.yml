@@ -1,0 +1,17 @@
+---
+# Stop the cluster stack before destroy: a live pacemaker/corosync container can outlast Docker's 60 s remove timeout
+- name: Cleanup
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Stop the cluster services
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - pacemaker
+        - sbd
+        - corosync-qdevice
+        - corosync
+        - corosync-qnetd
+      failed_when: false

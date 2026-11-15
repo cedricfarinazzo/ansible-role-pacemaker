@@ -1,0 +1,44 @@
+---
+# Shared by every scenario: tools for the checks, packages start their services on install as on a host, and a
+# stand-in watchdog device (a container has none; SBD runs config-only here).
+- name: Prepare
+  hosts: all
+  tasks:
+    # The image's policy-rc.d (exit 101) stops every postinst from starting its service; a real host starts
+    # corosync and pacemaker at install: removed, so the scenarios install as a host does
+    - name: Packages start their services on install, as on a host
+      ansible.builtin.file:
+        path: /usr/sbin/policy-rc.d
+        state: absent
+
+    - name: Tools are installed
+      ansible.builtin.apt:
+        name:
+          - iproute2
+          - procps
+          - psmisc
+        update_cache: true
+        cache_valid_time: 3600
+
+- name: The stand-in watchdog
+  hosts: nodes
+  tasks:
+    # A character device the role can stat and fuser; nothing opens it as a watchdog
+    - name: A character device at the watchdog path
+      ansible.builtin.command: mknod -m 0600 /dev/molecule-watchdog c 1 3
+      args:
+        creates: /dev/molecule-watchdog
+
+- name: The qnetd server
+  hosts: qnetd
+  tasks:
+    - name: Corosync-qnetd is installed
+      ansible.builtin.apt:
+        name: corosync-qnetd
+        state: present
+
+    - name: Corosync-qnetd runs
+      ansible.builtin.systemd_service:
+        name: corosync-qnetd.service
+        state: started
+        enabled: true

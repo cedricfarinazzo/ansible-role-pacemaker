@@ -1,0 +1,47 @@
+---
+- name: Pacemaker enabled and running
+  ansible.builtin.systemd_service:
+    name: pacemaker.service
+    enabled: true
+    state: started
+  # Check mode on a fresh host: the package, so the unit, is not there yet
+  when: >-
+    not ansible_check_mode
+    or (ansible_facts.services['pacemaker.service'] | default({})).status | default('not-found') != 'not-found'
+  register: __pacemaker_started
+
+- name: Read this node's name
+  ansible.builtin.command: crm_node -n
+  register: __pacemaker_node_name
+  changed_when: false
+  check_mode: false
+  # The controller's IPC comes up seconds after systemd reports pacemaker started
+  until: __pacemaker_node_name.rc == 0
+  retries: "{{ (pacemaker_join_timeout | int / 2) | int }}"
+  delay: 2
+  when: __pacemaker_started is not skipped
+
+# The node names come from the running membership, never from an input: every node of the play is online
+- name: Every node of the play is an online cluster member
+  ansible.builtin.shell:
+    cmd: |
+      set -uo pipefail
+      want="{{ ansible_play_hosts | map('extract', hostvars) | selectattr('__pacemaker_node_name.stdout', 'defined')
+               | map(attribute='__pacemaker_node_name.stdout') | join(' ') }}"
+      i=0
+      while [ "$i" -lt {{ pacemaker_join_timeout }} ]; do
+        online=$(crm_mon -1 2>/dev/null | sed -n 's/^ *\* Online: \[ \(.*\) \]$/\1/p; s/^Online: \[ \(.*\) \]$/\1/p')
+        miss=""
+        for n in $want; do
+          case " $online " in *" $n "*) ;; *) miss="$miss $n" ;; esac
+        done
+        [ -z "$miss" ] && crm_node -q 2>/dev/null | grep -qx 1 && exit 0
+        sleep 2; i=$((i + 2))
+      done
+      echo "not online after {{ pacemaker_join_timeout }} s:$miss (crm_node -l: $(crm_node -l | tr '\n' ' '))"
+      exit 1
+  args:
+    executable: /bin/bash
+  changed_when: false
+  check_mode: false
+  when: __pacemaker_started is not skipped

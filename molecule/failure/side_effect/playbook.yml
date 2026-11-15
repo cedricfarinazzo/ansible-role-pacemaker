@@ -1,0 +1,113 @@
+---
+# Each failure path on the built cluster: the role fails with its message, and changes nothing (verify checks the
+# properties and /etc/default/sbd after every case). Every case's rerun also changes no-quorum-policy and the SBD
+# timeout, so a write that slipped past the check shows in verify.
+- name: Failure paths
+  hosts: nodes
+  gather_facts: false
+  vars:
+    molecule_changes:
+      - -e
+      - '{"pacemaker_cluster_properties": {"no-quorum-policy": "ignore", "cluster-recheck-interval": "5min", "stonith-enabled": false}, "pacemaker_sbd_watchdog_timeout": 20}'
+  tasks:
+    - name: A property with a control character
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: control character
+        molecule_args:
+          - -e
+          - '{"pacemaker_cluster_properties": {"no-quorum-policy": "ignore\nx"}}'
+        molecule_expect: fail
+
+    - name: Refused by the input check
+      ansible.builtin.assert:
+        that: molecule_run.stdout is search('maps of names')
+        fail_msg: "{{ molecule_run.stdout_lines[-20:] }}"
+      run_once: true
+
+    - name: The watchdog device missing
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: watchdog missing
+        molecule_args: "{{ molecule_changes + ['-e', 'pacemaker_sbd_watchdog_device=/dev/molecule-missing'] }}"
+        molecule_expect: fail
+
+    - name: Refused, naming the device
+      ansible.builtin.assert:
+        that: molecule_run.stdout is search('/dev/molecule-missing is no watchdog character device')
+        fail_msg: "{{ molecule_run.stdout_lines[-20:] }}"
+      run_once: true
+
+    - name: Another process holds the watchdog device
+      ansible.builtin.command: >-
+        systemd-run --unit molecule-holder -p StandardInput=file:/dev/molecule-watchdog -p StandardOutput=journal
+        sleep infinity
+      changed_when: true
+      when: inventory_hostname == groups['nodes'][0]
+
+    - name: The role with the device held
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: watchdog held
+        molecule_args: "{{ molecule_changes }}"
+        molecule_expect: fail
+
+    - name: Refused before SBD starts, naming the process
+      ansible.builtin.assert:
+        that: molecule_run.stdout is search('/dev/molecule-watchdog is held by sleep \\(')
+        fail_msg: "{{ molecule_run.stdout_lines[-20:] }}"
+      run_once: true
+
+    - name: Release the device
+      ansible.builtin.systemd_service:
+        name: molecule-holder.service
+        state: stopped
+      when: inventory_hostname == groups['nodes'][0]
+
+    - name: An SBD device without a header
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: sbd device
+        molecule_args: "{{ molecule_changes + ['-e', '{\"pacemaker_sbd_devices\": [\"/dev/molecule-watchdog\"]}'] }}"
+        molecule_expect: fail
+
+    - name: Refused, with the command to initialise it
+      ansible.builtin.assert:
+        that: molecule_run.stdout is search('initialise them once with')
+        fail_msg: "{{ molecule_run.stdout_lines[-20:] }}"
+      run_once: true
+
+    - name: Stop corosync on the second node
+      ansible.builtin.systemd_service:
+        name: corosync.service
+        state: stopped
+      when: inventory_hostname == groups['nodes'][1]
+
+    - name: The role with corosync stopped on one node
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: corosync stopped
+        molecule_args: "{{ molecule_changes + ['-e', 'molecule_pacemaker_only=true'] }}"
+        molecule_expect: fail
+
+    - name: Refused before any change, naming corosync and the node
+      ansible.builtin.assert:
+        that: molecule_run.stdout is search('corosync is not running or not quorate on ' ~ groups['nodes'][1])
+        fail_msg: "{{ molecule_run.stdout_lines[-20:] }}"
+      run_once: true
+
+    - name: Corosync still stopped there, the role started nothing  # noqa: command-instead-of-module
+      ansible.builtin.command: systemctl is-active corosync.service
+      register: molecule_corosync
+      changed_when: false
+      failed_when: molecule_corosync.stdout == 'active'
+      when: inventory_hostname == groups['nodes'][1]
+
+    - name: Start the stack again
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: started
+      loop:
+        - corosync.service
+        - pacemaker.service
+      when: inventory_hostname == groups['nodes'][1]
