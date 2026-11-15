@@ -9,11 +9,11 @@
       - pacemaker_packages_extra is not mapping
       - pacemaker_packages_extra | map('string') | reject('match', '^[a-z0-9][a-z0-9.+-]+\Z') | list | length == 0
       - pacemaker_pcsd_masked is boolean
-      - pacemaker_sbd is boolean and pacemaker_sbd_service is boolean
+      - pacemaker_sbd is boolean and pacemaker_sbd_service is boolean and pacemaker_allow_restart is boolean
       - pacemaker_join_timeout | string is match('^[1-9][0-9]{0,4}\Z')
     fail_msg: >-
       pacemaker_state present|absent; pacemaker_packages_extra a list of package names; pacemaker_pcsd_masked,
-      pacemaker_sbd, pacemaker_sbd_service booleans; pacemaker_join_timeout seconds, 1-99999
+      pacemaker_sbd, pacemaker_sbd_service, pacemaker_allow_restart booleans; pacemaker_join_timeout seconds, 1-99999
     quiet: true
 
 - name: SBD settings are sound
@@ -64,3 +64,26 @@
       pacemaker_sbd_devices; Pacemaker's controller exits when it is set and SBD does not run
     quiet: true
   when: pacemaker_state == 'present'
+
+# Pacemaker: stonith-watchdog-timeout at least twice SBD_WATCHDOG_TIMEOUT (-1 lets Pacemaker take twice), and
+# stonith-timeout, set explicitly (its default of 60 s may be shorter), longer than it; both in seconds
+- name: Watchdog fencing timeouts fit the SBD watchdog timeout
+  ansible.builtin.assert:
+    that:
+      - __pacemaker_swt is match('^(-1|[1-9][0-9]*s?)\Z')
+      - __pacemaker_st is match('^[1-9][0-9]*s?\Z')
+      - __pacemaker_swt_s | int >= 2 * (pacemaker_sbd_watchdog_timeout | int)
+      - __pacemaker_st | regex_replace('s\Z', '') | int > __pacemaker_swt_s | int
+    fail_msg: >-
+      stonith-watchdog-timeout ({{ __pacemaker_swt }}) must be seconds (or -1) and at least twice
+      pacemaker_sbd_watchdog_timeout ({{ pacemaker_sbd_watchdog_timeout }}); stonith-timeout
+      ({{ __pacemaker_st | default('unset', true) }}) must be set, in seconds, and longer than it
+    quiet: true
+  vars:
+    __pacemaker_swt: "{{ pacemaker_cluster_properties['stonith-watchdog-timeout'] | default('0', true) | string }}"
+    __pacemaker_st: "{{ pacemaker_cluster_properties['stonith-timeout'] | default('', true) | string }}"
+    __pacemaker_swt_s: "{{ (2 * (pacemaker_sbd_watchdog_timeout | int)) if __pacemaker_swt == '-1' else (__pacemaker_swt | regex_replace('s\\Z', '')) }}"
+  when:
+    - pacemaker_state == 'present'
+    - pacemaker_sbd
+    - __pacemaker_swt not in ['0', '0s']

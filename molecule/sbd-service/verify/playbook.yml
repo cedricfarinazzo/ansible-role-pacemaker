@@ -1,0 +1,29 @@
+---
+- name: Verify
+  hosts: nodes
+  gather_facts: false
+  tasks:
+    - name: Every node online with quorum
+      ansible.builtin.include_tasks: ../../shared/online.yml
+
+    - name: SBD runs on the device and Pacemaker knows it; the timeouts are set; pcsd is left as the corosync role set it
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          fail() { echo "FAIL: $*"; exit 1; }
+          q() { crm_attribute --type crm_config --name "$1" --query --quiet; }
+          [ "$(systemctl is-active sbd.service)" = active ] || fail "sbd not active"
+          [ "$(systemctl is-enabled sbd.service)" = enabled ] || fail "sbd not enabled"
+          fuser /dev/molecule-watchdog 2>/dev/null | grep -q . || fail "sbd holds no watchdog device"
+          grep -qx 'SBD_WATCHDOG_TIMEOUT=10' /etc/default/sbd || fail "SBD_WATCHDOG_TIMEOUT"
+          grep -qx 'SBD_STARTMODE="always"' /etc/default/sbd || fail "SBD_STARTMODE"
+          [ "$(q have-watchdog)" = true ] || fail "have-watchdog: $(q have-watchdog)"
+          [ "$(q stonith-watchdog-timeout)" = 20 ] || fail "stonith-watchdog-timeout"
+          [ "$(q stonith-timeout)" = 40s ] || fail "stonith-timeout"
+          [ "$(q stonith-enabled)" = true ] || fail "stonith-enabled"
+          # pacemaker_pcsd_masked: false leaves the mask the corosync role set; the role itself masks nothing here
+          [ "$(systemctl is-enabled pcsd.service 2>&1)" = masked ] || fail "pcsd: $(systemctl is-enabled pcsd.service 2>&1)"
+          dpkg-query -W -f '${Status}\n' resource-agents | grep -q 'ok installed' || fail "extra package"
+      args:
+        executable: /bin/bash
+      changed_when: false

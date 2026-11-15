@@ -84,30 +84,30 @@
   when: not (ansible_check_mode and __pacemaker_sbd_missing)
 
 # sbd starts with corosync (PartOf, RequiredBy) and Pacemaker reads have-watchdog at its start: a new or changed
-# SBD configuration restarts the whole stack, one node at a time, each node back in a quorate partition first
-- name: Restart the cluster stack on the SBD configuration, one node at a time
-  ansible.builtin.command:
-    argv:
-      - sh
-      - -c
-      - |
-        systemctl restart corosync.service || exit 1
-        systemctl start pacemaker.service || exit 1
-        if systemctl cat corosync-qdevice.service >/dev/null 2>&1 && systemctl is-enabled -q corosync-qdevice.service; then
-          systemctl start corosync-qdevice.service || exit 1
-        fi
-        i=0
-        while [ "$i" -lt "$1" ]; do
-          systemctl is-active -q sbd.service && crm_mon -1 2>/dev/null | grep -q 'partition with quorum' \
-            && crm_node -q 2>/dev/null | grep -qx 1 && exit 0
-          sleep 2; i=$((i + 2))
-        done
-        echo "not back in a quorate partition with sbd running after $1 s"; exit 1
-      - sh
-      - "{{ pacemaker_join_timeout }}"
-  throttle: 1
-  changed_when: true
-  when:
-    - pacemaker_sbd_service
-    - not ansible_check_mode
-    - __pacemaker_sbd_conf is changed or (ansible_facts.services['sbd.service'] | default({})).state | default('') != 'running'
+# SBD configuration restarts the stack, one node at a time, each node back in a quorate partition first. The first
+# failure stops the roll: the nodes after it keep their running stack (restart_node.yml)
+- name: This node needs the stack restart
+  ansible.builtin.set_fact:
+    __pacemaker_restart_node: >-
+      {{ pacemaker_sbd_service and pacemaker_allow_restart and not ansible_check_mode
+         and (__pacemaker_sbd_conf is changed
+              or (ansible_facts.services['sbd.service'] | default({})).state | default('') != 'running') }}
+    __pacemaker_restart_failed: ""
+
+- name: Restart the cluster stack, one node at a time
+  ansible.builtin.include_tasks: restart_node.yml
+  loop: >-
+    {{ ansible_play_hosts | map('extract', hostvars) | selectattr('__pacemaker_restart_node', 'defined')
+       | selectattr('__pacemaker_restart_node') | map(attribute='inventory_hostname') | list }}
+  loop_control:
+    loop_var: __pacemaker_node
+  run_once: true
+
+- name: The stack restarted on every node that needed it
+  ansible.builtin.assert:
+    that: __pacemaker_restart_failed | length == 0
+    fail_msg: >-
+      The stack restart failed on {{ __pacemaker_restart_failed }}. The nodes after it were not restarted. Fix it
+      there (journalctl -u sbd -u pacemaker -u corosync) and run the role again
+    quiet: true
+  run_once: true

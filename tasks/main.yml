@@ -9,6 +9,10 @@
     - name: Corosync runs and is quorate on every node
       ansible.builtin.include_tasks: corosync.yml
 
+    - name: A stack restart is allowed when SBD needs one
+      ansible.builtin.include_tasks: restart_check.yml
+      when: pacemaker_sbd and pacemaker_sbd_service
+
     - name: Packages
       ansible.builtin.include_tasks: install.yml
 

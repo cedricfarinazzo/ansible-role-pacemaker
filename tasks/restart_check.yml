@@ -1,0 +1,36 @@
+---
+# A new or changed SBD configuration, or sbd not running, restarts the cluster stack on every node (sbd.yml): resources
+# on a node stop while it restarts. Refused on every node, before any package or file changes, unless
+# pacemaker_allow_restart.
+- name: Read the services
+  ansible.builtin.service_facts:
+
+- name: SBD configuration as it would be written
+  ansible.builtin.template:
+    src: sbd.j2
+    dest: "{{ pacemaker_sbd_config }}"
+    owner: root
+    group: root
+    mode: "0644"
+  check_mode: true
+  diff: false
+  register: __pacemaker_sbd_probe
+
+- name: This node needs a stack restart
+  ansible.builtin.set_fact:
+    __pacemaker_restart_needed: >-
+      {{ __pacemaker_sbd_probe is changed
+         or (ansible_facts.services['sbd.service'] | default({})).state | default('') != 'running' }}
+
+- name: The stack restart is allowed
+  ansible.builtin.assert:
+    that: pacemaker_allow_restart or __pacemaker_restart_hosts | length == 0
+    fail_msg: >-
+      SBD is new or changed on {{ __pacemaker_restart_hosts | join(', ') }}: applying it restarts corosync, pacemaker
+      and sbd on every node, one at a time, and stops that node's resources while it restarts. Nothing was changed.
+      Set pacemaker_allow_restart: true to allow it
+    quiet: true
+  vars:
+    __pacemaker_restart_hosts: >-
+      {{ ansible_play_hosts_all | map('extract', hostvars) | selectattr('__pacemaker_restart_needed', 'defined')
+         | selectattr('__pacemaker_restart_needed') | map(attribute='inventory_hostname') | list }}

@@ -1,0 +1,177 @@
+---
+# Reruns from the control node: no change, check mode, a restart refused without the opt-in and nothing changed,
+# fencing timeouts that do not fit refused, a changed SBD timeout applied with the opt-in one node at a time, a
+# restart that fails on the first node leaving the others untouched, then the repair.
+- name: Reruns
+  hosts: nodes
+  gather_facts: false
+  tasks:
+    - name: Rerun with no change
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: no change
+        molecule_args: []
+        molecule_expect: ok
+
+    - name: Nothing changed, no restart of a running sbd
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true
+
+    - name: Check mode on the converged cluster
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: check mode
+        molecule_args:
+          - --check
+        molecule_expect: ok
+
+    - name: Check mode changes nothing
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true
+
+    - name: Remember sbd's start time  # noqa: command-instead-of-module
+      ansible.builtin.command: systemctl show -p ActiveEnterTimestampMonotonic --value sbd.service
+      register: molecule_sbd_before
+      changed_when: false
+
+    - name: A changed SBD option without the restart opt-in
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: restart refused
+        molecule_args:
+          - -e
+          - '{"pacemaker_allow_restart": false, "pacemaker_sbd_options": {"SBD_STARTMODE": "clean", "SBD_OPTS": "-T"}}'
+        molecule_expect: fail
+
+    - name: Refused before any change, naming the setting
+      ansible.builtin.assert:
+        that: "molecule_run.stdout is search('Set pacemaker_allow_restart: true')"
+        fail_msg: "{{ molecule_run.stdout_lines[-20:] }}"
+      run_once: true
+
+    - name: A stonith-watchdog-timeout under twice the SBD timeout
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: timeouts do not fit
+        molecule_args:
+          - -e
+          - '{"pacemaker_sbd_watchdog_timeout": 11}'
+        molecule_expect: fail
+
+    - name: Refused by the input check
+      ansible.builtin.assert:
+        that: molecule_run.stdout is search('at least twice')
+        fail_msg: "{{ molecule_run.stdout_lines[-20:] }}"
+      run_once: true
+
+    - name: Neither run changed sbd or its configuration
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          grep -qx 'SBD_WATCHDOG_TIMEOUT=10' /etc/default/sbd || { echo "FAIL: /etc/default/sbd changed"; exit 1; }
+          [ "$(systemctl show -p ActiveEnterTimestampMonotonic --value sbd.service)" = "{{ molecule_sbd_before.stdout }}" ] \
+            || { echo "FAIL: sbd restarted"; exit 1; }
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: A changed SBD timeout and fitting fencing timeouts, restart allowed
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: restart allowed
+        molecule_args:
+          - -e
+          - '{"pacemaker_sbd_watchdog_timeout": 11, "pacemaker_cluster_properties": {"stonith-enabled": true, "stonith-watchdog-timeout": 22, "stonith-timeout": "44s"}}'
+        molecule_expect: ok
+
+    - name: Every node changed, the properties written once
+      ansible.builtin.assert:
+        that:
+          - molecule_run.stdout | regex_findall('changed=0 ') | length == 0
+          - molecule_run.stdout | regex_findall('failed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true
+
+    - name: Sbd restarted with the new timeout, the cluster whole, have-watchdog true
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          fail() { echo "FAIL: $*"; exit 1; }
+          grep -qx 'SBD_WATCHDOG_TIMEOUT=11' /etc/default/sbd || fail "SBD_WATCHDOG_TIMEOUT"
+          [ "$(systemctl is-active sbd.service)" = active ] || fail "sbd not active"
+          [ "$(systemctl show -p ActiveEnterTimestampMonotonic --value sbd.service)" != "{{ molecule_sbd_before.stdout }}" ] || fail "sbd not restarted"
+          q() { crm_attribute --type crm_config --name "$1" --query --quiet; }
+          [ "$(q have-watchdog)" = true ] || fail "have-watchdog"
+          [ "$(q stonith-watchdog-timeout)" = 22 ] || fail "stonith-watchdog-timeout"
+          [ "$(q stonith-timeout)" = 44s ] || fail "stonith-timeout"
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: The same values again
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: applied again
+        molecule_args:
+          - -e
+          - '{"pacemaker_sbd_watchdog_timeout": 11, "pacemaker_cluster_properties": {"stonith-enabled": true, "stonith-watchdog-timeout": 22, "stonith-timeout": "44s"}}'
+        molecule_expect: ok
+
+    - name: The rerun changes nothing
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true
+
+    - name: Remember corosync's start time on every node  # noqa: command-instead-of-module
+      ansible.builtin.command: systemctl show -p ActiveEnterTimestampMonotonic --value corosync.service
+      register: molecule_corosync_before
+      changed_when: false
+
+    # sbd cannot set the stand-in device's timeout without -T: its start fails on the first node restarted
+    - name: A restart that fails on the first node
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: restart fails
+        molecule_args:
+          - -e
+          - '{"pacemaker_sbd_watchdog_timeout": 12, "pacemaker_sbd_options": {"SBD_STARTMODE": "always"}, "pacemaker_cluster_properties": {"stonith-enabled": true, "stonith-watchdog-timeout": 24, "stonith-timeout": "48s"}}'
+        molecule_expect: fail
+
+    - name: The failure names the first node
+      ansible.builtin.assert:
+        that: molecule_run.stdout is search('The stack restart failed on ' ~ groups['nodes'][0])
+        fail_msg: "{{ molecule_run.stdout_lines[-20:] }}"
+      run_once: true
+
+    - name: The other nodes were not restarted  # noqa: command-instead-of-module
+      ansible.builtin.command: systemctl show -p ActiveEnterTimestampMonotonic --value corosync.service
+      register: molecule_corosync_after
+      changed_when: false
+      failed_when: molecule_corosync_after.stdout != molecule_corosync_before.stdout
+      when: inventory_hostname != groups['nodes'][0]
+
+    - name: Repair, as the first run's inputs again with the new timeouts
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: repaired
+        molecule_args:
+          - -e
+          - '{"pacemaker_sbd_watchdog_timeout": 12, "pacemaker_cluster_properties": {"stonith-enabled": true, "stonith-watchdog-timeout": 24, "stonith-timeout": "48s"}}'
+        molecule_expect: ok
+
+    - name: Online again, sbd running, the new values
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          fail() { echo "FAIL: $*"; exit 1; }
+          systemctl is-active -q sbd.service || fail "sbd not active"
+          grep -qx 'SBD_WATCHDOG_TIMEOUT=12' /etc/default/sbd || fail "timeout"
+          [ "$(crm_attribute --type crm_config --name stonith-watchdog-timeout --query --quiet)" = 24 ] || fail "swt"
+      args:
+        executable: /bin/bash
+      changed_when: false
