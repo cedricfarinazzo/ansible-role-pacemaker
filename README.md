@@ -107,6 +107,79 @@ The role never writes an SBD header (it erases the device). Initialise each devi
 
 `pacemaker_state: absent` stops and disables Pacemaker and SBD, purges the packages and removes `/var/lib/pacemaker` and `/etc/default/sbd`. `sbd` stops only with corosync, and a killed `sbd` lets the watchdog reset the node: when `sbd` runs, the role stops corosync on that node first and leaves it stopped. Corosync's configuration and the `pcsd` mask are left to whoever set them up.
 
+## 🎯 Usage Examples
+
+### Two nodes and a quorum device, diskless SBD
+
+Two votes plus the quorum device make three, so quorum means something and the watchdog alone can fence a node that loses it.
+
+```yaml
+- hosts: cluster          # node-a, node-b
+  become: true
+  roles:
+    - role: cedricfarinazzo.corosync
+      vars:
+        corosync_cluster_name: example
+        corosync_nodes:
+          - {name: node-a, nodeid: 1, addrs: [192.0.2.11]}
+          - {name: node-b, nodeid: 2, addrs: [192.0.2.12]}
+        corosync_qdevice: true
+        corosync_qdevice_host: qnetd.example.com
+        corosync_qdevice_address: 192.0.2.10
+    - role: cedricfarinazzo.pacemaker
+      vars:
+        pacemaker_sbd_watchdog_device: /dev/watchdog0
+        pacemaker_sbd_watchdog_timeout: 10
+        pacemaker_cluster_properties:
+          stonith-enabled: true
+          stonith-watchdog-timeout: 20     # at least twice the watchdog timeout
+          no-quorum-policy: stop
+```
+
+### Two nodes and a quorum device, SBD off
+
+For a cluster fenced by fence agents: no `sbd` package, no watchdog. Create the fence devices as cluster resources, outside this role.
+
+```yaml
+- hosts: cluster
+  become: true
+  roles:
+    - role: cedricfarinazzo.corosync
+      vars:
+        corosync_cluster_name: example
+        corosync_nodes:
+          - {name: node-a, nodeid: 1, addrs: [192.0.2.11]}
+          - {name: node-b, nodeid: 2, addrs: [192.0.2.12]}
+        corosync_qdevice: true
+        corosync_qdevice_host: qnetd.example.com
+        corosync_qdevice_address: 192.0.2.10
+    - role: cedricfarinazzo.pacemaker
+      vars:
+        pacemaker_sbd: false
+        pacemaker_packages_extra:
+          - fence-agents
+        pacemaker_cluster_properties:
+          no-quorum-policy: stop
+        pacemaker_resource_defaults:
+          resource-stickiness: 100
+```
+
+### SBD with a shared device
+
+Initialise the device once first (see [SBD with devices](#sbd-with-devices)).
+
+```yaml
+- hosts: cluster
+  become: true
+  roles:
+    - role: cedricfarinazzo.pacemaker
+      vars:
+        pacemaker_sbd_devices:
+          - /dev/disk/by-id/example-sbd-device
+        pacemaker_sbd_options:
+          SBD_STARTMODE: clean
+```
+
 ## 🧪 Testing
 
 ```bash
