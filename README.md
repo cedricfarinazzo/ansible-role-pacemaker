@@ -9,6 +9,21 @@ The role never builds the Corosync cluster: run [`cedricfarinazzo.corosync`](htt
 
 ## 🚀 Quick Start
 
+Install from Ansible Galaxy ([cedricfarinazzo.pacemaker](https://galaxy.ansible.com/cedricfarinazzo/pacemaker), [cedricfarinazzo.corosync](https://galaxy.ansible.com/cedricfarinazzo/corosync)), pinned to a release:
+
+```yaml
+# requirements.yml
+roles:
+  - name: cedricfarinazzo.pacemaker
+    version: 1.0.0
+  - name: cedricfarinazzo.corosync
+    version: 1.0.0
+```
+
+```bash
+ansible-galaxy role install -r requirements.yml
+```
+
 ```yaml
 - hosts: cluster
   become: true
@@ -110,6 +125,20 @@ tests/validate.test.sh             # the input checks
 
 A container has no watchdog: the scenarios run SBD config-only (`pacemaker_sbd_service: false`) on a stand-in character device. The stack restart on SBD, and the reset itself, are only proven on hosts.
 
+## 🚢 Releases
+
+Once CI passes on `main`, [semantic-release](https://github.com/semantic-release/semantic-release) cuts the version from [Conventional Commits](https://www.conventionalcommits.org/): `fix:` releases a patch, `feat:` a minor, a `!` or `BREAKING CHANGE:` footer a major. A squash merge lands the pull request title (checked in CI), a merge commit lands each branch commit, so both must follow the convention. Each release gets a bare semver tag (`1.2.3`) and GitHub release notes; Ansible Galaxy imports the new tag from the repository. [Renovate](https://docs.renovatebot.com/) keeps the tooling and the pinned GitHub Actions up to date.
+
+## 📦 Dependencies
+
+- ✅ **Ansible Core Modules** (built-in); no collection
+- ✅ **OS packages** `pacemaker`, `pacemaker-cli-utils`, `pcs`, `psmisc`, `sbd` (with SBD)
+- ✅ **A running Corosync cluster**, e.g. from [cedricfarinazzo.corosync](https://galaxy.ansible.com/cedricfarinazzo/corosync)
+
+## 👥 Authors & Contributors
+
+**Cédric Farinazzo** ([@cedricfarinazzo](https://github.com/cedricfarinazzo)) - *Author and Maintainer*
+
 ## 📄 License
 
-MIT
+MIT, see [LICENSE](LICENSE).
