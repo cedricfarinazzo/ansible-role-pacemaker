@@ -29,3 +29,6 @@ node_modules/
 # Logs of parallel Molecule runs (run-tests.sh)
 .molecule-logs/
 .claude/
+
+# Test-only roles the Molecule dependency step installs (molecule/shared/collections.yml)
+molecule/shared/roles/

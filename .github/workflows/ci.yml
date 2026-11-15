@@ -20,6 +20,8 @@ jobs:
           cache-dependency-path: requirements-dev.txt
       - run: pip install -r requirements-dev.txt
       - run: ansible-galaxy collection install -r requirements.yml
+      # ansible-lint resolves the corosync role the scenarios use
+      - run: ansible-galaxy install -r molecule/shared/collections.yml -p molecule/shared/roles
       - run: yamllint .
       # Galaxy refuses the import of a description over 255 characters
       - name: Galaxy description length

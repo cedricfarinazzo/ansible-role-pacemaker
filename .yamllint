@@ -4,6 +4,7 @@ extends: default
 ignore: |
   .venv/
   node_modules/
+  molecule/shared/roles/
 
 rules:
   line-length:

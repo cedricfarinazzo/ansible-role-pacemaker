@@ -1,7 +1,7 @@
 ---
 dependency:
   name: shell
-  command: sh -c 'ansible-galaxy install -r "$MOLECULE_SCENARIO_DIRECTORY/../shared/collections.yml" -p "$MOLECULE_EPHEMERAL_DIRECTORY/roles"'
+  command: sh -c 'ansible-galaxy install -r "$MOLECULE_SCENARIO_DIRECTORY/../shared/collections.yml" -p "$MOLECULE_SCENARIO_DIRECTORY/../shared/roles"'
 driver:
   name: docker
 # Three nodes on one network: Corosync by the corosync role, then Pacemaker with SBD config-only (no watchdog here)

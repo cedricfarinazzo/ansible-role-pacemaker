@@ -8,6 +8,7 @@ exclude_paths:
   - .github/
   - .venv/
   - node_modules/
+  - molecule/shared/roles/
 # Task files the scenarios include, not playbooks
 kinds:
   - tasks: "molecule/shared/{recap,online}.yml"
