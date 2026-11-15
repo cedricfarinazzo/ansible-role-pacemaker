@@ -42,6 +42,7 @@ provisioner:
     prepare: ../shared/prepare.yml
     converge: ../shared/converge.yml
     side_effect: side_effect/playbook.yml
+    cleanup: ../shared/cleanup.yml
     verify: verify/playbook.yml
   inventory:
     group_vars:
@@ -84,4 +85,5 @@ scenario:
     - converge
     - verify
     - side_effect
+    - cleanup
     - destroy
