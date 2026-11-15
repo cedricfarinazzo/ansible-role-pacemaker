@@ -15,6 +15,10 @@
   register: __pacemaker_node_name
   changed_when: false
   check_mode: false
+  # The controller's IPC comes up seconds after systemd reports pacemaker started
+  until: __pacemaker_node_name.rc == 0
+  retries: "{{ (pacemaker_join_timeout | int / 2) | int }}"
+  delay: 2
   when: __pacemaker_started is not skipped
 
 # The node names come from the running membership, never from an input: every node of the play is online

@@ -10,6 +10,12 @@
   changed_when: false
   failed_when: false
   check_mode: false
+  # Quorum lags a corosync (re)start by the token timeout: wait while active and not yet quorate, never when stopped
+  until: >-
+    __pacemaker_corosync.stdout_lines | first | default('') != 'active'
+    or 'quorum=0' in __pacemaker_corosync.stdout_lines
+  retries: "{{ (pacemaker_join_timeout | int / 2) | int }}"
+  delay: 2
 
 - name: This node's corosync state
   ansible.builtin.set_fact:

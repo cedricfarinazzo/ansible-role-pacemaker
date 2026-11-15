@@ -73,7 +73,7 @@ pacemaker_sbd_options: {}                    # other SBD_* settings, e.g. {SBD_S
 pacemaker_cluster_properties: {}             # crm_config; a null value deletes the property
 pacemaker_resource_defaults: {}              # rsc_defaults
 pacemaker_op_defaults: {}                    # op_defaults
-pacemaker_join_timeout: 120                  # seconds to wait for a node online
+pacemaker_join_timeout: 120                  # seconds to wait for quorum, the controller, a node online
 ```
 
 Names are `[A-Za-z][A-Za-z0-9_-]*`; values printable, 1-255 characters; booleans are written `true`/`false`.
