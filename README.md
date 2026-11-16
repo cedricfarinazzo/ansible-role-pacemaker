@@ -90,6 +90,11 @@ pacemaker_cluster_properties: {}             # crm_config; a null value deletes 
 pacemaker_resource_defaults: {}              # rsc_defaults
 pacemaker_op_defaults: {}                    # op_defaults
 pacemaker_join_timeout: 120                  # seconds to wait for quorum, the controller, a node online
+
+pacemaker_rejoin: false                      # true: a timer starts the stack again after a failed start
+pacemaker_rejoin_interval: 60                # seconds between retries, 1-99999
+pacemaker_rejoin_units:                      # .service or .target names started on a retry
+  - pacemaker.service                        # add corosync-qdevice.service with a quorum device
 ```
 
 Names are `[A-Za-z][A-Za-z0-9_-]*`; values printable, 1-255 characters; booleans are written `true`/`false`.
@@ -103,6 +108,10 @@ On a first run, with `pacemaker_allow_restart: true`, SBD is enabled and the sta
 ### SBD with devices
 
 The role never writes an SBD header (it erases the device). Initialise each device once, from one node: `sbd -d /dev/disk/by-id/<id> create`. The role refuses a device it cannot read a header from.
+
+### Rejoin after a failed start
+
+`sbd` starts with corosync, and its cluster servant waits for a running local corosync. When corosync waits for `network-online.target` at boot (the network is down, e.g. a node reset by its watchdog while isolated), sbd hits its start timeout first: corosync and pacemaker fail as a dependency, and systemd never retries that, even once the network is back. With `pacemaker_rejoin: true` the role installs `pacemaker-rejoin.timer`. Every `pacemaker_rejoin_interval` seconds, if `sbd`, `corosync` or `pacemaker` is **failed**, it runs `systemctl start --no-block` on `pacemaker_rejoin_units`. Fencing is unchanged: the stack starts through its normal unit chain, sbd and its watchdog first, and the node joins only by corosync membership and quorum. A clean `systemctl stop` leaves the units inactive, not failed, so the timer never undoes it. A start that fails for another reason (e.g. a stack restart by this role that failed) is retried the same way; `systemctl stop pacemaker-rejoin.timer` pauses it. Off by default; `false` removes the timer.
 
 ### Removal
 
@@ -196,6 +205,7 @@ tests/validate.test.sh             # the input checks
 | `qdevice` | Two nodes and a qnetd host: a node down leaves the other quorate, the rerun changes nothing |
 | `sbd-off` | No SBD package or file, `have-watchdog` false; SBD turned on config-only, then off |
 | `sbd-service` | Three nodes, sbd really running on a stand-in character device: the opt-in refused without `pacemaker_allow_restart` with nothing changed, timeouts that do not fit refused, `have-watchdog` true, a changed SBD timeout restarted one node at a time, `pcsd` left alone, an extra package, check mode and reruns change nothing |
+| `rejoin` | Three nodes, sbd running: one node boots with its peers unreachable (iptables, a stand-in for `network-online` that waits for a peer), sbd's start times out, corosync and pacemaker fail as a dependency; once the network is back the node stays out with the timer off, and rejoins by itself with it on; a clean stop is not undone; the timer removed when turned off |
 | `failure` | A control character, a missing watchdog, a watchdog held by another process (named), an SBD device without a header, corosync stopped on one node: each fails with its message, no property and no SBD file changed |
 
 A container has no watchdog: `sbd` runs on a stand-in character device that never resets the node, and the other scenarios run SBD config-only (`pacemaker_sbd_service: false`). The reset itself is only proven on hosts.

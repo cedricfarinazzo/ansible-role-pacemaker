@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+# Starts the cluster stack again after a failed start (sbd timed out with no corosync, e.g. no network at boot).
+# A clean stop leaves the units inactive, not failed: never undone here. The normal unit chain runs: sbd first.
+[Unit]
+Description=Start the cluster stack again after a failed start
+After=network.target
+
+[Service]
+Type=oneshot
+ExecCondition=/bin/systemctl is-failed --quiet sbd.service corosync.service pacemaker.service
+ExecStart=/bin/systemctl start --no-block {{ pacemaker_rejoin_units | join(' ') }}

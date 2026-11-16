@@ -7,6 +7,11 @@
 - name: Read the packages
   ansible.builtin.package_facts:
 
+- name: Rejoin timer stopped and removed
+  ansible.builtin.include_tasks: rejoin.yml
+  vars:
+    pacemaker_rejoin: false
+
 - name: Pacemaker stopped and disabled
   ansible.builtin.systemd_service:
     name: pacemaker.service

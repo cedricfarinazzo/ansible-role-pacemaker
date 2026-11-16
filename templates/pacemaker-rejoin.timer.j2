@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Retry a failed cluster stack start every {{ pacemaker_rejoin_interval }} s
+
+[Timer]
+OnBootSec={{ pacemaker_rejoin_interval }}
+OnUnitInactiveSec={{ pacemaker_rejoin_interval }}
+AccuracySec=1
+
+[Install]
+WantedBy=timers.target
