@@ -13,3 +13,10 @@
   args:
     creates: /etc/systemd/system/pcsd.service
   when: pacemaker_pcsd_masked
+
+# A unit that already failed stays listed as failed until reset; no IPMI device means nothing to lose
+- name: Mask openipmi  # noqa: command-instead-of-module
+  ansible.builtin.shell:
+    cmd: systemctl mask --now openipmi.service && { systemctl reset-failed openipmi.service 2>/dev/null || true; }
+    creates: /etc/systemd/system/openipmi.service
+  when: pacemaker_openipmi_masked

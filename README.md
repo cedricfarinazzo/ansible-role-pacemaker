@@ -48,7 +48,7 @@ ansible-galaxy role install -r requirements.yml
 The role will:
 - ✅ Check every input before any change (anchored patterns, no control character in any value)
 - ✅ Check that corosync runs and is quorate on every node of the play, before any package, service or CIB change: one node down or unreachable stops the role on every node, with nothing changed
-- ✅ Install `pacemaker`, `pacemaker-cli-utils`, `pcs`, `psmisc` (and `sbd`), mask `pcsd` (nothing listens on TCP 2224)
+- ✅ Install `pacemaker`, `pacemaker-cli-utils`, `pcs`, `psmisc` (and `sbd`), mask `pcsd` (nothing listens on TCP 2224); optionally mask `openipmi`, which `ipmitool` recommends and which fails at boot on a host without IPMI hardware
 - ✅ With SBD: refuse a watchdog path that is no character device, or that a process other than `sbd` holds (the message names it); refuse SBD devices without an SBD header; write `/etc/default/sbd`; enable `sbd` with corosync
 - ✅ Refuse, before any change, a new or changed SBD configuration (it restarts the stack, and a node's resources stop while it restarts) unless `pacemaker_allow_restart: true`; with it, restart the stack on every node, one node at a time, each back in a quorate partition with `sbd` running before the next (Pacemaker reads `have-watchdog` at its start)
 - ✅ Start Pacemaker and wait until every node of the play, by its name in the running membership (`crm_node -n`), is online in a partition with quorum
@@ -77,6 +77,7 @@ The scenarios beyond the default one run on Debian 13.
 pacemaker_state: present                     # absent: stop, purge, remove the CIB and /etc/default/sbd
 pacemaker_packages_extra: []                 # e.g. fence-agents
 pacemaker_pcsd_masked: true                  # false leaves pcsd as its package set it
+pacemaker_openipmi_masked: false             # true masks openipmi.service (fails at boot without IPMI hardware)
 
 pacemaker_sbd: true                          # false: no SBD (fence agents instead)
 pacemaker_sbd_service: true                  # false: /etc/default/sbd written, sbd.service disabled
@@ -116,6 +117,24 @@ The role never writes an SBD header (it erases the device). Initialise each devi
 ### Removal
 
 `pacemaker_state: absent` stops and disables Pacemaker and SBD, purges the packages and removes `/var/lib/pacemaker` and `/etc/default/sbd`. `sbd` stops only with corosync, and a killed `sbd` lets the watchdog reset the node: when `sbd` runs, the role stops corosync on that node first and leaves it stopped. Corosync's configuration and the `pcsd` mask are left to whoever set them up.
+
+### Stopping a node for maintenance
+
+Never stop `pacemaker` alone while `sbd` and `corosync` run: Debian's `pacemaker.service` uses `KillMode=process`, so a forked Pacemaker child can outlive the stop, `sbd`'s Pacemaker servant never sees a clean shutdown, and the watchdog resets the node. Move the resources off, then stop Pacemaker and Corosync in one command (`sbd` stops with Corosync):
+
+```bash
+crm_attribute --node "$(crm_node -n)" --name standby --update on
+crm_mon -1                          # wait until the node runs no resource
+systemctl stop pacemaker corosync
+```
+
+Bring it back, then let it take resources again:
+
+```bash
+systemctl start corosync pacemaker  # sbd starts with corosync
+systemctl start corosync-qdevice    # only on a node that uses a quorum device (it stopped with corosync)
+crm_attribute --node "$(crm_node -n)" --name standby --delete
+```
 
 ## 🎯 Usage Examples
 
