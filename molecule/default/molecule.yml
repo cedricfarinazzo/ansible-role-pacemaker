@@ -74,6 +74,7 @@ provisioner:
           nodeid: "{{ molecule_nodeid | int }}"
           addrs:
             - "{{ ansible_facts.default_ipv4.address }}"
+        pacemaker_openipmi_masked: true
         pacemaker_sbd_service: false
         pacemaker_sbd_watchdog_device: /dev/molecule-watchdog
         pacemaker_sbd_watchdog_timeout: 15
