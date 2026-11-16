@@ -18,7 +18,7 @@ Public Ansible role `cedricfarinazzo.pacemaker` (Ansible Galaxy): Pacemaker on a
 - `molecule/qdevice/` — two nodes and a qnetd host; a node down and back.
 - `molecule/sbd-off/` — no SBD; SBD on config-only and off again.
 - `molecule/sbd-service/` — sbd running on a stand-in device: restart opt-in, timeouts, have-watchdog, one-node-at-a-time restart.
-- `molecule/rejoin/` — three nodes, sbd running: a boot with the peers unreachable, the stack back by itself only with the timer; a clean stop not undone.
+- `molecule/rejoin/` — three nodes, sbd running: a boot with the peers unreachable, the stack back by itself only with the timer; a clean stop not undone.  A new interval restarts the running timer.
 - `molecule/failure/` — failure paths on a two-node cluster, then verify nothing changed.
 - `tests/validate.test.sh` — good and bad inputs against `tasks/validate.yml` on localhost.
 - `run-tests.sh` / `Makefile` — local Molecule entry points; several distros or `all` run in parallel, one log each in `.molecule-logs/`.

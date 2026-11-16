@@ -131,3 +131,47 @@
 
     - name: Every node online at the end
       ansible.builtin.include_tasks: ../../shared/online.yml
+
+    # ExecCondition skips while the stack is healthy: OnUnitInactiveSec must keep firing after a skip
+    - name: The timer keeps firing after skipped runs
+      when: inventory_hostname == molecule_first
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          t() { systemctl show pacemaker-rejoin.timer -p LastTriggerUSecMonotonic --value; }
+          a=$(t); sleep 14; b=$(t); sleep 14; c=$(t)
+          [ "$a" != "$b" ] && [ "$b" != "$c" ] || { echo "FAIL: no two firings: $a $b $c"; exit 1; }
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: A new interval on the running timer
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: interval changed
+        molecule_args:
+          - -e
+          - '{"pacemaker_rejoin_interval": 15}'
+        molecule_expect: ok
+
+    - name: The running timer takes the new interval
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          systemctl is-active -q pacemaker-rejoin.timer || { echo "FAIL: timer not active"; exit 1; }
+          grep -qx 'OnUnitInactiveSec=15' /etc/systemd/system/pacemaker-rejoin.timer || { echo "FAIL: file"; exit 1; }
+          systemctl show pacemaker-rejoin.timer -p TimersMonotonic --value | grep -q 'OnUnitInactiveUSec=15s' \
+            || { echo "FAIL: loaded: $(systemctl show pacemaker-rejoin.timer -p TimersMonotonic --value)"; exit 1; }
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: The interval back to the scenario's
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: interval restored
+        molecule_args: []
+        molecule_expect: ok
+
+    - name: Every node online after the interval changes
+      ansible.builtin.include_tasks: ../../shared/online.yml
