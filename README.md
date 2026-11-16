@@ -48,7 +48,7 @@ ansible-galaxy role install -r requirements.yml
 The role will:
 - ✅ Check every input before any change (anchored patterns, no control character in any value)
 - ✅ Check that corosync runs and is quorate on every node of the play, before any package, service or CIB change: one node down or unreachable stops the role on every node, with nothing changed
-- ✅ Install `pacemaker`, `pacemaker-cli-utils`, `pcs`, `psmisc` (and `sbd`), mask `pcsd` (nothing listens on TCP 2224); optionally mask `openipmi`, which `cluster-glue` pulls in and which fails at boot on a host without IPMI hardware
+- ✅ Install `pacemaker`, `pacemaker-cli-utils`, `pcs`, `psmisc` (and `sbd`), mask `pcsd` (nothing listens on TCP 2224); optionally mask `openipmi`, which `ipmitool` recommends and which fails at boot on a host without IPMI hardware
 - ✅ With SBD: refuse a watchdog path that is no character device, or that a process other than `sbd` holds (the message names it); refuse SBD devices without an SBD header; write `/etc/default/sbd`; enable `sbd` with corosync
 - ✅ Refuse, before any change, a new or changed SBD configuration (it restarts the stack, and a node's resources stop while it restarts) unless `pacemaker_allow_restart: true`; with it, restart the stack on every node, one node at a time, each back in a quorate partition with `sbd` running before the next (Pacemaker reads `have-watchdog` at its start)
 - ✅ Start Pacemaker and wait until every node of the play, by its name in the running membership (`crm_node -n`), is online in a partition with quorum
