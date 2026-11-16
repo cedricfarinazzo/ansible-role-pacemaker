@@ -8,11 +8,11 @@
       - pacemaker_packages_extra is sequence and pacemaker_packages_extra is not string
       - pacemaker_packages_extra is not mapping
       - pacemaker_packages_extra | map('string') | reject('match', '^[a-z0-9][a-z0-9.+-]+\Z') | list | length == 0
-      - pacemaker_pcsd_masked is boolean
+      - pacemaker_pcsd_masked is boolean and pacemaker_openipmi_masked is boolean
       - pacemaker_sbd is boolean and pacemaker_sbd_service is boolean and pacemaker_allow_restart is boolean
       - pacemaker_join_timeout | string is match('^[1-9][0-9]{0,4}\Z')
     fail_msg: >-
-      pacemaker_state present|absent; pacemaker_packages_extra a list of package names; pacemaker_pcsd_masked,
+      pacemaker_state present|absent; pacemaker_packages_extra a list of package names; pacemaker_pcsd_masked, pacemaker_openipmi_masked,
       pacemaker_sbd, pacemaker_sbd_service, pacemaker_allow_restart booleans; pacemaker_join_timeout seconds, 1-99999
     quiet: true
 

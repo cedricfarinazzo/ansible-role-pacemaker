@@ -23,6 +23,8 @@
           [ "$(q stonith-enabled)" = true ] || fail "stonith-enabled"
           # pacemaker_pcsd_masked: false leaves the mask the corosync role set; the role itself masks nothing here
           [ "$(systemctl is-enabled pcsd.service 2>&1)" = masked ] || fail "pcsd: $(systemctl is-enabled pcsd.service 2>&1)"
+          # pacemaker_openipmi_masked defaults to false: no mask
+          [ "$(systemctl is-enabled openipmi.service 2>&1)" != masked ] || fail "openipmi masked by default"
           dpkg-query -W -f '${Status}\n' resource-agents | grep -q 'ok installed' || fail "extra package"
       args:
         executable: /bin/bash
