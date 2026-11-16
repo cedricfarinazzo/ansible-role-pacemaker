@@ -122,6 +122,7 @@ Bring it back, then let it take resources again:
 
 ```bash
 systemctl start corosync pacemaker  # sbd starts with corosync
+systemctl start corosync-qdevice    # only on a node that uses a quorum device (it stopped with corosync)
 crm_attribute --node "$(crm_node -n)" --name standby --delete
 ```
 
