@@ -33,5 +33,14 @@ pacemaker_cluster_properties: {}
 pacemaker_resource_defaults: {}
 pacemaker_op_defaults: {}
 
+# A node whose stack failed to start (sbd timed out at boot with no corosync yet, e.g. the network still down)
+# retries it on a timer: only a failed sbd, corosync or pacemaker counts, never a clean stop
+pacemaker_rejoin: false
+# Seconds between retries, 5-99999 (a lower value trips the service's start limit)
+pacemaker_rejoin_interval: 60
+# Units started on a retry: the stack comes up through pacemaker's dependencies; add e.g. corosync-qdevice.service
+pacemaker_rejoin_units:
+  - pacemaker.service
+
 # Seconds to wait for a node to rejoin after a stack restart, and for every node to be online
 pacemaker_join_timeout: 120

@@ -10,14 +10,15 @@ Public Ansible role `cedricfarinazzo.pacemaker` (Ansible Galaxy): Pacemaker on a
 
 - `defaults/main.yml` — every user-facing variable (`pacemaker_*`), with its generic default.
 - `vars/main.yml` — package list, `/etc/default/sbd` path, the CIB sections and their inputs, crm_attribute's "not set" exit codes.
-- `tasks/main.yml` — `validate.yml` (every input), then for `present`: `corosync.yml` (corosync active and quorate on every play host, before any change), `install.yml` (packages, `pcsd` masked, `openipmi` masked on opt-in), `restart_check.yml` (a stack restart refused on every node unless `pacemaker_allow_restart`, before any package), `sbd.yml` (watchdog checks, device headers, `/etc/default/sbd`, rolling stack restart) or `sbd_off.yml`, `service.yml` (pacemaker running, every node online), `properties.yml` (read, write the differences, read back; run_once); for `absent`: `absent.yml`.
-- `templates/sbd.j2` — `/etc/default/sbd`.
+- `tasks/main.yml` — `validate.yml` (every input), then for `present`: `corosync.yml` (corosync active and quorate on every play host, before any change), `install.yml` (packages, `pcsd` masked, `openipmi` masked on opt-in), `restart_check.yml` (a stack restart refused on every node unless `pacemaker_allow_restart`, before any package), `sbd.yml` (watchdog checks, device headers, `/etc/default/sbd`, rolling stack restart) or `sbd_off.yml`, `service.yml` (pacemaker running, every node online), `rejoin.yml` (the opt-in rejoin timer, or its removal), `properties.yml` (read, write the differences, read back; run_once); for `absent`: `absent.yml`.
+- `templates/sbd.j2` — `/etc/default/sbd`; `pacemaker-rejoin.{service,timer}.j2` — the timer that restarts a failed stack start.
 - `meta/main.yml` — Galaxy metadata; `platforms` lists exactly what CI tests.
 - `molecule/shared/` — `collections.yml` (the docker driver and the corosync role's release tag), `prepare.yml` (policy-rc.d removed, a stand-in watchdog character device, qnetd on the `qnetd` group), `converge.yml` (corosync role, then this one), `run.sh` and `recap.yml` (a rerun from the control node, its recap checked), `online.yml`.
 - `molecule/default/` — three nodes, every distribution; reruns: no change, check mode, properties changed and deleted, absent twice.
 - `molecule/qdevice/` — two nodes and a qnetd host; a node down and back.
 - `molecule/sbd-off/` — no SBD; SBD on config-only and off again.
 - `molecule/sbd-service/` — sbd running on a stand-in device: restart opt-in, timeouts, have-watchdog, one-node-at-a-time restart.
+- `molecule/rejoin/` — three nodes, sbd running: a boot with the peers unreachable, the stack back by itself only with the timer; a clean stop not undone.  A new interval restarts the running timer.
 - `molecule/failure/` — failure paths on a two-node cluster, then verify nothing changed.
 - `tests/validate.test.sh` — good and bad inputs against `tasks/validate.yml` on localhost.
 - `run-tests.sh` / `Makefile` — local Molecule entry points; several distros or `all` run in parallel, one log each in `.molecule-logs/`.
@@ -37,6 +38,7 @@ Public Ansible role `cedricfarinazzo.pacemaker` (Ansible Galaxy): Pacemaker on a
 - **Fencing timeouts checked in `validate.yml`:** `stonith-watchdog-timeout` at least twice the SBD timeout, `stonith-timeout` longer.
 - **No change before Corosync is checked on every node:** a node down or unreachable stops the role everywhere, so no node writes the CIB.
 - **CIB writes are run_once and only for values that differ;** each is read back. No `pcs` command that needs `pcsd`.
+- **The rejoin timer only acts on a failed sbd, corosync or pacemaker,** never on a clean stop, and only through the normal unit chain (sbd first, corosync membership and quorum).
 - **The role never writes an SBD device header** (`sbd create` erases the device).
 - **Examples never copy a real deployment:** `example.com` names, documentation addresses.
 - **GitHub Actions pinned by full commit SHA**, tag in a trailing comment. Exact pins for tooling; `renovate.json` identical in the sibling roles: change them together.

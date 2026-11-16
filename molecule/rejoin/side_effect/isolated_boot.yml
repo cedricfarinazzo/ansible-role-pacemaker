@@ -1,0 +1,49 @@
+---
+# Tasks, on one node: stop the stack, cut the node off, start the stack as a boot does, wait for the failed start,
+# restore the network; molecule_expect_rejoin says whether the stack must come back by itself.
+- name: Stop the stack cleanly  # noqa: command-instead-of-module
+  ansible.builtin.command: systemctl stop corosync.service
+  changed_when: true
+
+- name: Cut the node off its peers
+  ansible.builtin.shell:
+    cmd: |
+      iptables -I INPUT -i eth0 -j DROP
+      iptables -I OUTPUT -o eth0 -j DROP
+  changed_when: true
+
+# --no-block: the start jobs queue as at boot; sbd's start runs while corosync's job waits for the network
+- name: The boot starts the stack  # noqa: command-instead-of-module
+  ansible.builtin.command: systemctl start --no-block pacemaker.service
+  changed_when: true
+
+- name: Sbd's start fails, corosync and pacemaker do not run
+  ansible.builtin.shell:
+    cmd: |
+      for i in $(seq 60); do systemctl is-failed -q sbd.service && break; sleep 1; done
+      systemctl is-failed -q sbd.service || { echo "FAIL: sbd did not fail: $(systemctl is-active sbd.service)"; exit 1; }
+      ! systemctl is-active -q corosync.service || { echo "FAIL: corosync runs"; exit 1; }
+      ! systemctl is-active -q pacemaker.service || { echo "FAIL: pacemaker runs"; exit 1; }
+  changed_when: false
+
+- name: The network comes back
+  ansible.builtin.shell:
+    cmd: |
+      iptables -D INPUT -i eth0 -j DROP
+      iptables -D OUTPUT -o eth0 -j DROP
+  changed_when: true
+
+- name: The stack comes back by itself, or stays down
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      up() { for u in sbd corosync pacemaker; do systemctl is-active -q "$u.service" || return 1; done; }
+      for i in $(seq 90); do up && break; sleep 1; done
+      if {{ molecule_expect_rejoin | ternary('true', 'false') }}; then
+        up || { echo "FAIL: not back: $(systemctl is-active sbd corosync pacemaker | tr '\n' ' ')"; exit 1; }
+      else
+        ! up || { echo "FAIL: back with no timer: a retry outside the role"; exit 1; }
+      fi
+  args:
+    executable: /bin/bash
+  changed_when: false

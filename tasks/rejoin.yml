@@ -1,0 +1,53 @@
+---
+# A failed boot start (sbd's start timeout before corosync runs, the network still down) is never retried by
+# systemd: a timer starts the stack again, only while sbd, corosync or pacemaker is failed.
+- name: Rejoin units
+  ansible.builtin.template:
+    src: "pacemaker-rejoin.{{ item }}.j2"
+    dest: "/etc/systemd/system/pacemaker-rejoin.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - service
+    - timer
+  register: __pacemaker_rejoin_files
+  when: pacemaker_rejoin
+
+# Restarted on a changed file: a running timer keeps its old interval otherwise
+- name: Rejoin timer enabled and running
+  ansible.builtin.systemd_service:
+    name: pacemaker-rejoin.timer
+    enabled: true
+    state: "{{ 'restarted' if __pacemaker_rejoin_files is changed else 'started' }}"
+    daemon_reload: "{{ __pacemaker_rejoin_files is changed }}"
+  when: pacemaker_rejoin and not (ansible_check_mode and __pacemaker_rejoin_files is changed)
+
+- name: Read the rejoin timer
+  ansible.builtin.stat:
+    path: /etc/systemd/system/pacemaker-rejoin.timer
+    get_checksum: false
+  register: __pacemaker_rejoin_timer
+  when: not pacemaker_rejoin
+
+- name: Rejoin timer stopped and disabled
+  ansible.builtin.systemd_service:
+    name: pacemaker-rejoin.timer
+    enabled: false
+    state: stopped
+  when: not pacemaker_rejoin and __pacemaker_rejoin_timer.stat.exists
+
+- name: Rejoin units removed
+  ansible.builtin.file:
+    path: "/etc/systemd/system/pacemaker-rejoin.{{ item }}"
+    state: absent
+  loop:
+    - timer
+    - service
+  register: __pacemaker_rejoin_removed
+  when: not pacemaker_rejoin
+
+- name: Systemd forgets the rejoin units  # noqa: no-handler
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: not pacemaker_rejoin and __pacemaker_rejoin_removed is changed

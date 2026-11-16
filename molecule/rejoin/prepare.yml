@@ -1,0 +1,12 @@
+---
+- name: Shared preparation
+  ansible.builtin.import_playbook: ../shared/prepare.yml
+
+- name: Tools to cut a node off its peers
+  hosts: nodes
+  tasks:
+    - name: Iptables and ping are installed
+      ansible.builtin.apt:
+        name:
+          - iptables
+          - iputils-ping

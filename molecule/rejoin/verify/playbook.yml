@@ -1,0 +1,23 @@
+---
+- name: Verify
+  hosts: nodes
+  gather_facts: false
+  tasks:
+    - name: Every node online with quorum
+      ansible.builtin.include_tasks: ../../shared/online.yml
+
+    - name: The rejoin timer runs, its service only starts the stack after a failed start
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          fail() { echo "FAIL: $*"; exit 1; }
+          [ "$(systemctl is-enabled pacemaker-rejoin.timer)" = enabled ] || fail "timer not enabled"
+          systemctl is-active -q pacemaker-rejoin.timer || fail "timer not active"
+          s=/etc/systemd/system/pacemaker-rejoin.service
+          grep -qx 'ExecCondition=/bin/systemctl is-failed --quiet sbd.service corosync.service pacemaker.service' $s \
+            || fail "condition"
+          grep -qx 'ExecStart=/bin/systemctl start --no-block pacemaker.service' $s || fail "units"
+          grep -qx 'OnUnitInactiveSec=10' /etc/systemd/system/pacemaker-rejoin.timer || fail "interval"
+      args:
+        executable: /bin/bash
+      changed_when: false

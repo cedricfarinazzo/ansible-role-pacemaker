@@ -27,6 +27,9 @@
     - name: Pacemaker service and membership
       ansible.builtin.include_tasks: service.yml
 
+    - name: Rejoin after a failed start
+      ansible.builtin.include_tasks: rejoin.yml
+
     - name: Cluster properties and defaults
       ansible.builtin.include_tasks: properties.yml
 

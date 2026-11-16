@@ -1,0 +1,108 @@
+---
+dependency:
+  name: shell
+  command: sh -c 'ansible-galaxy install -r "$MOLECULE_SCENARIO_DIRECTORY/../shared/collections.yml" -p "$MOLECULE_SCENARIO_DIRECTORY/../shared/roles"'
+driver:
+  name: docker
+# Three nodes, sbd running: the first boots with its peers unreachable, its stack start fails, then the network comes back
+platforms:
+  - name: pacemaker-a-rejoin-${MOLECULE_DISTRO:-debian13}
+    hostname: pacemaker-a
+    image: "geerlingguy/docker-${MOLECULE_DISTRO:-debian13}-ansible:latest"
+    command: ${MOLECULE_DOCKER_COMMAND:-""}
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    privileged: true
+    # libqb IPC of corosync and pacemaker lives in /dev/shm: Docker's 64 MB fills up
+    shm_size: 512m
+    pre_build_image: true
+    networks:
+      - name: pacemaker-rejoin-${MOLECULE_DISTRO:-debian13}
+    groups:
+      - nodes
+  - name: pacemaker-b-rejoin-${MOLECULE_DISTRO:-debian13}
+    hostname: pacemaker-b
+    image: "geerlingguy/docker-${MOLECULE_DISTRO:-debian13}-ansible:latest"
+    command: ${MOLECULE_DOCKER_COMMAND:-""}
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    privileged: true
+    # libqb IPC of corosync and pacemaker lives in /dev/shm: Docker's 64 MB fills up
+    shm_size: 512m
+    pre_build_image: true
+    networks:
+      - name: pacemaker-rejoin-${MOLECULE_DISTRO:-debian13}
+    groups:
+      - nodes
+  - name: pacemaker-c-rejoin-${MOLECULE_DISTRO:-debian13}
+    hostname: pacemaker-c
+    image: "geerlingguy/docker-${MOLECULE_DISTRO:-debian13}-ansible:latest"
+    command: ${MOLECULE_DOCKER_COMMAND:-""}
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    privileged: true
+    # libqb IPC of corosync and pacemaker lives in /dev/shm: Docker's 64 MB fills up
+    shm_size: 512m
+    pre_build_image: true
+    networks:
+      - name: pacemaker-rejoin-${MOLECULE_DISTRO:-debian13}
+    groups:
+      - nodes
+provisioner:
+  name: ansible
+  playbooks:
+    prepare: prepare.yml
+    converge: ../shared/converge.yml
+    side_effect: side_effect/playbook.yml
+    cleanup: ../shared/cleanup.yml
+    verify: verify/playbook.yml
+  inventory:
+    group_vars:
+      all:
+        ansible_become: false
+      nodes:
+        molecule_nodeid: "{{ groups['nodes'].index(inventory_hostname) + 1 }}"
+        corosync_cluster_name: molecule
+        corosync_nodes: >-
+          {{ groups['nodes'] | map('extract', hostvars) | map(attribute='molecule_node') | list }}
+        molecule_node:
+          name: "{{ inventory_hostname.split('-')[:2] | join('-') }}"
+          host: "{{ inventory_hostname }}"
+          nodeid: "{{ molecule_nodeid | int }}"
+          addrs:
+            - "{{ ansible_facts.default_ipv4.address }}"
+        pacemaker_allow_restart: true
+        pacemaker_pcsd_masked: false
+        pacemaker_packages_extra:
+          - resource-agents
+        pacemaker_sbd_watchdog_device: /dev/molecule-watchdog
+        pacemaker_sbd_watchdog_timeout: 10
+        pacemaker_sbd_options:
+          SBD_STARTMODE: always
+          # The stand-in device has no watchdog ioctl: sbd must not set its timeout
+          SBD_OPTS: -T
+        pacemaker_rejoin: true
+        pacemaker_rejoin_interval: 10
+        pacemaker_cluster_properties:
+          stonith-enabled: true
+          stonith-watchdog-timeout: 20
+          stonith-timeout: 40s
+verifier:
+  name: ansible
+scenario:
+  name: rejoin
+  test_sequence:
+    - dependency
+    - destroy
+    - create
+    - prepare
+    - check
+    - converge
+    - verify
+    - idempotence
+    - side_effect
+    - cleanup
+    - destroy

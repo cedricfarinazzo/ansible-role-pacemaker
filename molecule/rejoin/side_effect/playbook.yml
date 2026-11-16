@@ -1,0 +1,177 @@
+---
+# A boot with the network down, as on a host: corosync waits for a stand-in of network-online (ping a peer), sbd's
+# start times out first (its cluster servant needs a running corosync), corosync and pacemaker fail as dependency.
+# Then the network comes back. Without the rejoin timer the node stays out; with it the stack starts by itself.
+- name: An isolated boot
+  hosts: nodes
+  gather_facts: true
+  vars:
+    molecule_first: "{{ groups['nodes'][0] }}"
+    molecule_peer: "{{ hostvars[groups['nodes'][1]].ansible_facts.default_ipv4.address }}"
+  tasks:
+    - name: Rerun with no change
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: no change
+        molecule_args: []
+        molecule_expect: ok
+
+    - name: Nothing changed
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true
+
+    - name: Test-only units, the first node
+      when: inventory_hostname == molecule_first
+      block:
+        # Test-only, never the role's: a host's network-online waits for links; sbd's start timeout made short
+        - name: A stand-in network-online that waits for a peer
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/molecule-wait-online.service
+            mode: "0644"
+            content: |
+              [Unit]
+              Description=Molecule stand-in for network-online
+              [Service]
+              Type=oneshot
+              TimeoutStartSec=infinity
+              ExecStart=/bin/sh -c 'until ping -c1 -W1 {{ molecule_peer }} >/dev/null; do sleep 1; done'
+
+        - name: Drop-in directories
+          ansible.builtin.file:
+            path: "/etc/systemd/system/{{ item }}.service.d"
+            state: directory
+            mode: "0755"
+          loop:
+            - corosync
+            - sbd
+
+        - name: Corosync waits for it, sbd times out sooner
+          ansible.builtin.copy:
+            dest: "/etc/systemd/system/{{ item.unit }}.service.d/molecule.conf"
+            mode: "0644"
+            content: "{{ item.content }}"
+          loop:
+            - unit: corosync
+              content: "[Unit]\nWants=molecule-wait-online.service\nAfter=molecule-wait-online.service\n"
+            - unit: sbd
+              content: "[Service]\nTimeoutStartSec=20\n"
+          loop_control:
+            label: "{{ item.unit }}"
+
+        - name: Systemd reads them
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+
+    - name: The rejoin timer off
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: rejoin off
+        molecule_args:
+          - -e
+          - '{"pacemaker_rejoin": false}'
+        molecule_expect: ok
+
+    - name: The timer and its units are gone
+      ansible.builtin.shell:
+        cmd: |
+          [ ! -e /etc/systemd/system/pacemaker-rejoin.timer ] || { echo "FAIL: timer file"; exit 1; }
+          [ ! -e /etc/systemd/system/pacemaker-rejoin.service ] || { echo "FAIL: service file"; exit 1; }
+          ! systemctl is-active -q pacemaker-rejoin.timer || { echo "FAIL: timer active"; exit 1; }
+      changed_when: false
+
+    - name: Isolated boot without the timer
+      ansible.builtin.include_tasks: isolated_boot.yml
+      vars:
+        molecule_expect_rejoin: false
+      when: inventory_hostname == molecule_first
+
+    - name: Manual recovery  # noqa: command-instead-of-module
+      ansible.builtin.command: systemctl start pacemaker.service
+      changed_when: true
+      when: inventory_hostname == molecule_first
+
+    - name: Every node online again
+      ansible.builtin.include_tasks: ../../shared/online.yml
+
+    - name: The rejoin timer on
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: rejoin on
+        molecule_args: []
+        molecule_expect: ok
+
+    - name: Isolated boot with the timer
+      ansible.builtin.include_tasks: isolated_boot.yml
+      vars:
+        molecule_expect_rejoin: true
+      when: inventory_hostname == molecule_first
+
+    - name: Every node online, no manual command
+      ansible.builtin.include_tasks: ../../shared/online.yml
+
+    - name: A clean stop is not undone
+      when: inventory_hostname == molecule_first
+      block:
+        - name: Stop the stack cleanly  # noqa: command-instead-of-module
+          ansible.builtin.command: systemctl stop corosync.service
+          changed_when: true
+
+        - name: Corosync stays stopped over three timer periods
+          ansible.builtin.shell:
+            cmd: |
+              sleep 35
+              ! systemctl is-active -q corosync.service || { echo "FAIL: a clean stop was undone"; exit 1; }
+          changed_when: false
+
+        - name: Start it again  # noqa: command-instead-of-module
+          ansible.builtin.command: systemctl start pacemaker.service
+          changed_when: true
+
+    - name: Every node online at the end
+      ansible.builtin.include_tasks: ../../shared/online.yml
+
+    # ExecCondition skips while the stack is healthy: OnUnitInactiveSec must keep firing after a skip
+    - name: The timer keeps firing after skipped runs
+      when: inventory_hostname == molecule_first
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          t() { systemctl show pacemaker-rejoin.timer -p LastTriggerUSecMonotonic --value; }
+          a=$(t); sleep 14; b=$(t); sleep 14; c=$(t)
+          [ "$a" != "$b" ] && [ "$b" != "$c" ] || { echo "FAIL: no two firings: $a $b $c"; exit 1; }
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: A new interval on the running timer
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: interval changed
+        molecule_args:
+          - -e
+          - '{"pacemaker_rejoin_interval": 15}'
+        molecule_expect: ok
+
+    - name: The running timer takes the new interval
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          systemctl is-active -q pacemaker-rejoin.timer || { echo "FAIL: timer not active"; exit 1; }
+          grep -qx 'OnUnitInactiveSec=15' /etc/systemd/system/pacemaker-rejoin.timer || { echo "FAIL: file"; exit 1; }
+          systemctl show pacemaker-rejoin.timer -p TimersMonotonic --value | grep -q 'OnUnitInactiveUSec=15s' \
+            || { echo "FAIL: loaded: $(systemctl show pacemaker-rejoin.timer -p TimersMonotonic --value)"; exit 1; }
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: The interval back to the scenario's
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: interval restored
+        molecule_args: []
+        molecule_expect: ok
+
+    - name: Every node online after the interval changes
+      ansible.builtin.include_tasks: ../../shared/online.yml
