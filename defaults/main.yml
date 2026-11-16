@@ -7,6 +7,8 @@ pacemaker_packages_extra: []
 
 # pcsd rewrites corosync.conf and listens on TCP 2224: masked; false leaves it as its package set it
 pacemaker_pcsd_masked: true
+# openipmi.service (pulled in by cluster-glue's ipmitool) fails at boot on a host without IPMI hardware: true masks it
+pacemaker_openipmi_masked: false
 
 # SBD watchdog fencing; false skips SBD (a cluster fenced by fence agents)
 pacemaker_sbd: true
