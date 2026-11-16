@@ -109,6 +109,24 @@ The role never writes an SBD header (it erases the device). Initialise each devi
 
 `pacemaker_state: absent` stops and disables Pacemaker and SBD, purges the packages and removes `/var/lib/pacemaker` and `/etc/default/sbd`. `sbd` stops only with corosync, and a killed `sbd` lets the watchdog reset the node: when `sbd` runs, the role stops corosync on that node first and leaves it stopped. Corosync's configuration and the `pcsd` mask are left to whoever set them up.
 
+### Stopping a node for maintenance
+
+Never stop `pacemaker` alone while `sbd` and `corosync` run: Debian's `pacemaker.service` uses `KillMode=process`, so a forked Pacemaker child can outlive the stop, `sbd`'s Pacemaker servant never sees a clean shutdown, and the watchdog resets the node. Move the resources off, then stop Pacemaker and Corosync in one command (`sbd` stops with Corosync):
+
+```bash
+crm_attribute --node "$(crm_node -n)" --name standby --update on
+crm_mon -1                          # wait until the node runs no resource
+systemctl stop pacemaker corosync
+```
+
+Bring it back, then let it take resources again:
+
+```bash
+systemctl start corosync pacemaker  # sbd starts with corosync
+systemctl start corosync-qdevice    # only on a node that uses a quorum device (it stopped with corosync)
+crm_attribute --node "$(crm_node -n)" --name standby --delete
+```
+
 ## 🎯 Usage Examples
 
 ### Two nodes and a quorum device, diskless SBD
