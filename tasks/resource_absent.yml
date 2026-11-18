@@ -1,0 +1,67 @@
+---
+# One primitive (__pacemaker_rsc): target-role Stopped, wait until it runs nowhere, then its location constraints and
+# the primitive are deleted; never deleted while running
+- name: Stop {{ __pacemaker_rsc }}
+  ansible.builtin.command:
+    argv:
+      - crm_resource
+      - --resource
+      - "{{ __pacemaker_rsc }}"
+      - --meta
+      - --set-parameter
+      - target-role
+      - --parameter-value
+      - Stopped
+  changed_when: true
+  run_once: true
+
+- name: Wait until stopped everywhere, {{ __pacemaker_rsc }}
+  ansible.builtin.command:
+    argv:
+      - crm_resource
+      - --resource
+      - "{{ __pacemaker_rsc }}"
+      - --locate
+  register: __pacemaker_locate
+  changed_when: false
+  # crm_resource prints it on stderr
+  until: (__pacemaker_locate.stdout ~ __pacemaker_locate.stderr) is search('is NOT running')
+  retries: "{{ (pacemaker_join_timeout | int / 2) | round(0, 'ceil') | int }}"
+  delay: 2
+  run_once: true
+  when: not ansible_check_mode
+
+- name: Read the location constraints of {{ __pacemaker_rsc }}
+  ansible.builtin.command:
+    argv:
+      - cibadmin
+      - --query
+      - --xpath
+      - "/cib/configuration/constraints/rsc_location[@rsc='{{ __pacemaker_rsc }}']"
+  register: __pacemaker_rsc_locations
+  changed_when: false
+  failed_when: __pacemaker_rsc_locations.rc not in [0] + __pacemaker_unset_rc
+  check_mode: false
+  run_once: true
+
+# One by id: cibadmin --delete-all needs --force
+- name: Delete the location constraints of {{ __pacemaker_rsc }}
+  ansible.builtin.command:
+    argv:
+      - cibadmin
+      - --delete
+      - --xpath
+      - "/cib/configuration/constraints/rsc_location[@id='{{ item }}']"
+  loop: "{{ __pacemaker_rsc_locations.stdout | regex_findall('<rsc_location[^>]*? id=.([^\"]+).') }}"
+  changed_when: true
+  run_once: true
+
+- name: Delete {{ __pacemaker_rsc }}
+  ansible.builtin.command:
+    argv:
+      - cibadmin
+      - --delete
+      - --xpath
+      - "/cib/configuration/resources/primitive[@id='{{ __pacemaker_rsc }}']"
+  changed_when: true
+  run_once: true

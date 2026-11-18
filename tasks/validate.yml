@@ -95,3 +95,88 @@
     - pacemaker_state == 'present'
     - pacemaker_sbd
     - __pacemaker_swt not in ['0', '0s']
+
+# A value lands in an XML attribute: no quote, < > or &, so the role writes it unescaped
+- name: Primitives are sound
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.id | default('') | string is match('^[A-Za-z][A-Za-z0-9_.-]{0,63}\Z')
+      - item.class | default('') in ['ocf', 'systemd', 'lsb', 'service']
+      - (item.provider | default('') | string is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z')) == (item.class | default('') == 'ocf')
+      - item.type | default('') | string is match('^[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}\Z')
+      - item.state | default('present') in ['present', 'absent']
+      # A misspelt or unsupported key (group, clone, on-fail) is refused, never silently dropped
+      - item.keys() | list | difference(['id', 'class', 'provider', 'type', 'instance_attributes', 'meta_attributes', 'operations', 'state']) | length == 0
+      - item.instance_attributes | default({}) is mapping and item.meta_attributes | default({}) is mapping
+      - ((item.instance_attributes | default({})).keys() | list + (item.meta_attributes | default({})).keys() | list)
+        | map('string') | reject('match', '^[A-Za-z][A-Za-z0-9_.-]{0,63}\Z') | list | length == 0
+      - ((item.instance_attributes | default({})).values() | list + (item.meta_attributes | default({})).values() | list)
+        | select('none') | list | length == 0
+      - ((item.instance_attributes | default({})).values() | list + (item.meta_attributes | default({})).values() | list)
+        | map('string') | reject('match', '^[ !#-%(-;=?-~]{1,255}\Z') | list | length == 0
+      - item.operations | default([]) is sequence and item.operations | default([]) is not string
+      - item.operations | default([]) is not mapping
+      - item.operations | default([]) | reject('mapping') | list | length == 0
+      - item.operations | default([]) | map('list') | flatten | difference(['name', 'interval', 'timeout', 'on_fail']) | length == 0
+      - item.operations | default([]) | map(attribute='on_fail', default='restart') | map('string')
+        | reject('in', ['ignore', 'block', 'stop', 'restart', 'fence', 'standby', 'ask', 'demote', 'restart-container']) | list | length == 0
+      - item.operations | default([]) | map(attribute='name', default='') | map('string')
+        | reject('match', '^[a-z][a-z_-]{0,31}\Z') | list | length == 0
+      - item.operations | default([]) | map(attribute='interval', default='0') | map('string')
+        | reject('match', '^[0-9]{1,6}(ms|s|m|min|h)?\Z') | list | length == 0
+      - item.operations | default([]) | map(attribute='timeout', default='') | map('string')
+        | reject('match', '^[1-9][0-9]{0,5}(ms|s|m|min|h)?\Z') | list | length == 0
+      # The operation id is <id>-<name>-interval-<interval>: one operation per name and interval
+      - __pacemaker_op_keys | unique | length == __pacemaker_op_keys | length
+    fail_msg: >-
+      pacemaker_primitives ({{ item.id | default('?') | string | truncate(40) }}): id [A-Za-z][A-Za-z0-9_.-]*; class ocf,
+      systemd, lsb or service; provider for ocf only; type an agent name; instance_attributes and meta_attributes maps of
+      names to printable values without quotes, <, > or &; operations a list of {name, interval, timeout, on_fail} (e.g. monitor,
+      10s, 20s), one per name and interval; no other key; state present|absent
+    quiet: true
+  vars:
+    __pacemaker_op_keys: >-
+      {{ (item.operations | default([]) if item is mapping and item.operations | default([]) is sequence else [])
+         | map(attribute='name', default='') | zip((item.operations | default([]) if item is mapping
+         and item.operations | default([]) is sequence else []) | map(attribute='interval', default='0'))
+         | map('join', '/') | list }}
+  loop: "{{ pacemaker_primitives if pacemaker_primitives is sequence and pacemaker_primitives is not string and pacemaker_primitives is not mapping else [none] }}"
+  loop_control:
+    label: "{{ item.id | default('?') if item is mapping else item }}"
+  when: pacemaker_state == 'present'
+
+- name: Location constraints are sound
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.id | default('') | string is match('^[A-Za-z][A-Za-z0-9_.-]{0,63}\Z')
+      - item.resource | default('') | string is match('^[A-Za-z][A-Za-z0-9_.-]{0,63}\Z')
+      - item.node | default('') | string is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}\Z')
+      - item.score | default('') | string is match('^([+-]?INFINITY|-?(0|[1-9][0-9]{0,8}))\Z')
+      - item.state | default('present') in ['present', 'absent']
+      - item.keys() | list | difference(['id', 'resource', 'node', 'score', 'state']) | length == 0
+      # A constraint kept on a primitive this run removes would be left dangling
+      - >-
+        item.state | default('present') == 'absent' or item.resource | default('') not in
+        (pacemaker_primitives | selectattr('state', 'defined') | selectattr('state', '==', 'absent') | map(attribute='id') | list)
+    fail_msg: >-
+      pacemaker_location_constraints ({{ item.id | default('?') | string | truncate(40) }}): id and resource
+      [A-Za-z][A-Za-z0-9_.-]*; node a node name; score INFINITY, -INFINITY or an integer; state present|absent; no other key; a present
+      constraint cannot name a primitive set absent
+    quiet: true
+  loop: >-
+    {{ pacemaker_location_constraints if pacemaker_location_constraints is sequence
+       and pacemaker_location_constraints is not string and pacemaker_location_constraints is not mapping else [none] }}
+  loop_control:
+    label: "{{ item.id | default('?') if item is mapping else item }}"
+  when: pacemaker_state == 'present'
+
+- name: Resource ids are unique
+  ansible.builtin.assert:
+    that:
+      - (pacemaker_primitives | map(attribute='id') | list + pacemaker_location_constraints | map(attribute='id') | list)
+        | unique | length == pacemaker_primitives | length + pacemaker_location_constraints | length
+    fail_msg: pacemaker_primitives and pacemaker_location_constraints ids must be unique across both lists
+    quiet: true
+  when: pacemaker_state == 'present'

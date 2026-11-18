@@ -12,7 +12,9 @@ show_usage() {
     echo "Scenarios: default (three nodes: check mode, idempotence, properties changed, deleted and read back, absent),"
     echo "qdevice (two nodes and a qnetd host), sbd-off (no SBD, no stonith), sbd-service (sbd running, the restart opt-in),"
     echo "failure (bad inputs, watchdog missing or held by another process, uninitialised SBD device, corosync stopped),"
-    echo "rejoin (a node boots with its peers unreachable, its stack start fails; the rejoin timer starts it once they are back)."
+    echo "rejoin (a node boots with its peers unreachable, its stack start fails; the rejoin timer starts it once they are back),"
+    echo "resources (a Dummy primitive and a location constraint: rerun, a timeout changed, entries dropped, bad input, absent),"
+    echo "resources-multi (three primitives, every score kind: check mode, a parameter changed, locations moved, removal)."
     echo "Several distributions, or 'all', run in parallel; each writes .molecule-logs/<distro>.log."
     echo
     echo "Supported: ${SUPPORTED// /, }"

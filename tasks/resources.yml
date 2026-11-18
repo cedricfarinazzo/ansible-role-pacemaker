@@ -1,0 +1,167 @@
+---
+# Primitives and location constraints, from one node (run_once): each element is read with cibadmin, created when
+# absent, replaced when it differs (--create fails on an existing id), read back. An element missing from the input
+# is left alone; only state absent removes. No pcs, no pcsd.
+- name: Wanted CIB elements
+  ansible.builtin.set_fact:
+    # A namespace: a set inside a for loop does not outlive it in Jinja
+    __pacemaker_elements: >-
+      {% set e = [] %}{% for p in pacemaker_primitives if p.state | default('present') == 'present' %}{%
+        set ns = namespace(x='<primitive id="' ~ p.id ~ '" class="' ~ p['class'] ~ '"'
+          ~ (' provider="' ~ p.provider ~ '"' if p['class'] == 'ocf' else '') ~ ' type="' ~ p.type ~ '">') %}{%
+        for set_name in ['instance_attributes', 'meta_attributes'] if p[set_name] | default({}) | length > 0 %}{%
+          set ns.x = ns.x ~ '<' ~ set_name ~ ' id="' ~ p.id ~ '-' ~ set_name ~ '">' %}{%
+          for k, v in p[set_name] | dictsort %}{% set ns.x = ns.x ~ '<nvpair id="' ~ p.id ~ '-' ~ set_name ~ '-' ~ k
+            ~ '" name="' ~ k ~ '" value="' ~ (v | string | lower if v is boolean else v | string) ~ '"/>' %}{% endfor %}{%
+          set ns.x = ns.x ~ '</' ~ set_name ~ '>' %}{% endfor %}{%
+        if p.operations | default([]) | length > 0 %}{% set ns.x = ns.x ~ '<operations>' %}{%
+          for o in p.operations %}{% set ns.x = ns.x ~ '<op id="' ~ p.id ~ '-' ~ o.name ~ '-interval-'
+            ~ o.interval | default('0') ~ '" name="' ~ o.name ~ '" interval="' ~ o.interval | default('0') ~ '"'
+            ~ (' timeout="' ~ o.timeout ~ '"' if o.timeout is defined else '')
+            ~ (' on-fail="' ~ o.on_fail ~ '"' if o.on_fail is defined else '') ~ '/>' %}{% endfor %}{%
+          set ns.x = ns.x ~ '</operations>' %}{% endif %}{%
+        set _ = e.append({'kind': 'primitive', 'id': p.id, 'scope': 'resources', 'xml': ns.x ~ '</primitive>' if ns.x[-1:] == '>' and ns.x.count('<') > 1 else ns.x[:-1] ~ '/>',
+          'xpath': "/cib/configuration/resources/primitive[@id='" ~ p.id ~ "']"}) %}{% endfor %}{%
+      for c in pacemaker_location_constraints if c.state | default('present') == 'present' %}{%
+        set _ = e.append({'kind': 'rsc_location', 'id': c.id, 'scope': 'constraints',
+          'xml': '<rsc_location id="' ~ c.id ~ '" rsc="' ~ c.resource ~ '" node="' ~ c.node ~ '" score="' ~ c.score ~ '"/>',
+          'xpath': "/cib/configuration/constraints/rsc_location[@id='" ~ c.id ~ "']"}) %}{% endfor %}{{ e }}
+    __pacemaker_primitives_absent: >-
+      {{ pacemaker_primitives | selectattr('state', 'defined') | selectattr('state', '==', 'absent') | map(attribute='id') | list }}
+    __pacemaker_locations_absent: >-
+      {{ pacemaker_location_constraints | selectattr('state', 'defined') | selectattr('state', '==', 'absent')
+         | map(attribute='id') | list }}
+  run_once: true
+
+# Before any write: an agent Pacemaker does not know fails here, naming the primitive
+- name: Every agent is known
+  ansible.builtin.command:
+    argv:
+      - crm_resource
+      - --show-metadata
+      - "{{ item['class'] ~ (':' ~ item.provider if item['class'] == 'ocf' else '') ~ ':' ~ item.type }}"
+  loop: "{{ pacemaker_primitives | rejectattr('state', 'defined') | list + __pacemaker_present }}"
+  loop_control:
+    label: "{{ item.id }}"
+  vars:
+    __pacemaker_present: "{{ pacemaker_primitives | selectattr('state', 'defined') | selectattr('state', '==', 'present') | list }}"
+  register: __pacemaker_agents
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  run_once: true
+
+- name: Unknown agents are refused
+  ansible.builtin.fail:
+    msg: >-
+      pacemaker_primitives: unknown agent for {{ __pacemaker_agents.results | selectattr('rc', '!=', 0)
+      | map(attribute='item') | map(attribute='id') | join(', ') }}; crm_resource --show-metadata found no such agent
+      (a missing resource-agents package, or a typo)
+  when: __pacemaker_agents.results | selectattr('rc', '!=', 0) | list | length > 0
+  run_once: true
+
+- name: Read the CIB elements
+  ansible.builtin.command:
+    argv:
+      - cibadmin
+      - --query
+      - --xpath
+      - "{{ item.xpath }}"
+  loop: "{{ __pacemaker_elements }}"
+  loop_control:
+    label: "{{ item.kind }} {{ item.id }}"
+  register: __pacemaker_element_read
+  changed_when: false
+  # 105 (CRM_EX_NOSUCH), 6 on older Pacemaker: no such element
+  failed_when: __pacemaker_element_read.rc not in [0] + __pacemaker_unset_rc
+  check_mode: false
+  run_once: true
+
+# The CIB pretty-prints: compared with the whitespace between tags removed
+- name: CIB elements to write
+  ansible.builtin.set_fact:
+    __pacemaker_element_changes: >-
+      {% set c = [] %}{% for r in __pacemaker_element_read.results | default([]) %}{%
+        if r.rc != 0 %}{% set _ = c.append(r.item | combine({'action': 'create'})) %}{%
+        elif r.stdout | regex_replace('>\s+<', '><') | trim != r.item.xml %}{%
+          set _ = c.append(r.item | combine({'action': 'replace'})) %}{% endif %}{% endfor %}{{ c }}
+  run_once: true
+
+- name: Create the missing elements, replace the ones that differ
+  ansible.builtin.command:
+    argv: >-
+      {{ ['cibadmin', '--create', '--scope', item.scope, '--xml-text', item.xml] if item.action == 'create'
+         else ['cibadmin', '--replace', '--xpath', item.xpath, '--xml-text', item.xml] }}
+  loop: "{{ __pacemaker_element_changes }}"
+  loop_control:
+    label: "{{ item.action }} {{ item.kind }} {{ item.id }}"
+  changed_when: true
+  run_once: true
+
+- name: Read the written elements back
+  ansible.builtin.command:
+    argv:
+      - cibadmin
+      - --query
+      - --xpath
+      - "{{ item.xpath }}"
+  loop: "{{ __pacemaker_element_changes }}"
+  loop_control:
+    label: "{{ item.kind }} {{ item.id }}"
+  register: __pacemaker_element_check
+  changed_when: false
+  failed_when: >-
+    __pacemaker_element_check.rc != 0 or __pacemaker_element_check.stdout | regex_replace('>\s+<', '><') | trim != item.xml
+  check_mode: false
+  run_once: true
+  when: not ansible_check_mode
+
+- name: Location constraints set absent still in the CIB
+  ansible.builtin.command:
+    argv:
+      - cibadmin
+      - --query
+      - --xpath
+      - "/cib/configuration/constraints/rsc_location[@id='{{ item }}']"
+  loop: "{{ __pacemaker_locations_absent }}"
+  register: __pacemaker_location_absent_read
+  changed_when: false
+  failed_when: __pacemaker_location_absent_read.rc not in [0] + __pacemaker_unset_rc
+  check_mode: false
+  run_once: true
+
+# cibadmin --delete of a missing element exits 0: only the ones read above are deleted
+- name: Remove the location constraints set absent
+  ansible.builtin.command:
+    argv:
+      - cibadmin
+      - --delete
+      - --xpath
+      - "/cib/configuration/constraints/rsc_location[@id='{{ item }}']"
+  loop: >-
+    {{ __pacemaker_location_absent_read.results | default([]) | selectattr('rc', 'defined') | selectattr('rc', '==', 0)
+       | map(attribute='item') | list }}
+  changed_when: true
+  run_once: true
+
+- name: Primitives set absent still in the CIB
+  ansible.builtin.command:
+    argv:
+      - cibadmin
+      - --query
+      - --xpath
+      - "/cib/configuration/resources/primitive[@id='{{ item }}']"
+  loop: "{{ __pacemaker_primitives_absent }}"
+  register: __pacemaker_absent_read
+  changed_when: false
+  failed_when: __pacemaker_absent_read.rc not in [0] + __pacemaker_unset_rc
+  check_mode: false
+  run_once: true
+
+- name: Remove a primitive, stopped first
+  ansible.builtin.include_tasks: resource_absent.yml
+  loop: >-
+    {{ __pacemaker_absent_read.results | default([]) | selectattr('rc', 'defined') | selectattr('rc', '==', 0)
+       | map(attribute='item') | list }}
+  loop_control:
+    loop_var: __pacemaker_rsc

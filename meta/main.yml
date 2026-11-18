@@ -3,7 +3,7 @@ galaxy_info:
   role_name: pacemaker
   namespace: cedricfarinazzo
   author: Cédric Farinazzo
-  description: Pacemaker on a running Corosync cluster, diskless or disk SBD on a watchdog, cluster properties and defaults set once by local CIB tools, pcsd masked
+  description: Pacemaker on a running Corosync cluster, diskless or disk SBD on a watchdog, cluster properties, defaults, primitives and location constraints set once by local CIB tools, pcsd masked
   license: MIT
   min_ansible_version: "2.15"
   platforms:

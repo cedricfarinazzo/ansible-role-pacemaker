@@ -1,0 +1,40 @@
+---
+# Tasks: the CIB matches the inputs, read on every node with crm_resource and cibadmin; molecule_primitives and
+# molecule_locations default to the role's inputs. Fails on any attribute, operation, score or element missing.
+- name: The CIB matches the inputs
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      fail() { echo "FAIL: $*"; exit 1; }
+      {% for p in molecule_primitives if p.state | default('present') == 'present' %}
+      x=$(cibadmin --query --xpath "/cib/configuration/resources/primitive[@id='{{ p.id }}']") || fail "{{ p.id }} missing"
+      grep -q 'class="{{ p["class"] }}"' <<<"$x" && grep -q 'type="{{ p.type }}"' <<<"$x" || fail "{{ p.id }} agent: $x"
+      {% for k, v in (p.instance_attributes | default({})) | dictsort %}
+      [ "$(crm_resource --resource {{ p.id }} --get-parameter {{ k }} --quiet)" = "{{ v }}" ] || fail "{{ p.id }} {{ k }}"
+      {% endfor %}
+      {% for k, v in (p.meta_attributes | default({})) | dictsort %}
+      [ "$(crm_resource --resource {{ p.id }} --meta --get-parameter {{ k }} --quiet)" = "{{ v }}" ] || fail "{{ p.id }} meta {{ k }}"
+      {% endfor %}
+      [ "$(grep -c '<op ' <<<"$x")" = "{{ p.operations | default([]) | length }}" ] || fail "{{ p.id }} operation count: $x"
+      {% for o in p.operations | default([]) %}
+      grep -q 'name="{{ o.name }}" interval="{{ o.interval }}" timeout="{{ o.timeout }}"{{ ' on-fail="' ~ o.on_fail ~ '"' if o.on_fail is defined else '' }}' <<<"$x" || fail "{{ p.id }} {{ o.name }}: $x"
+      {% endfor %}
+      {% endfor %}
+      {% for p in molecule_primitives if p.state | default('present') == 'absent' %}
+      if cibadmin --query --xpath "//primitive[@id='{{ p.id }}']" >/dev/null 2>&1; then fail "{{ p.id }} left"; fi
+      {% endfor %}
+      {% for c in molecule_locations %}
+      {% if c.state | default('present') == 'present' %}
+      x=$(cibadmin --query --xpath "//rsc_location[@id='{{ c.id }}']") || fail "{{ c.id }} missing"
+      grep -q 'rsc="{{ c.resource }}" node="{{ c.node }}" score="{{ c.score }}"' <<<"$x" || fail "{{ c.id }}: $x"
+      {% else %}
+      if cibadmin --query --xpath "//rsc_location[@id='{{ c.id }}']" >/dev/null 2>&1; then fail "{{ c.id }} left"; fi
+      {% endif %}
+      {% endfor %}
+      echo ok
+  args:
+    executable: /bin/bash
+  changed_when: false
+  vars:
+    molecule_primitives: "{{ pacemaker_primitives }}"
+    molecule_locations: "{{ pacemaker_location_constraints }}"

@@ -90,6 +90,8 @@ pacemaker_sbd_options: {}                    # other SBD_* settings, e.g. {SBD_S
 pacemaker_cluster_properties: {}             # crm_config; a null value deletes the property
 pacemaker_resource_defaults: {}              # rsc_defaults
 pacemaker_op_defaults: {}                    # op_defaults
+pacemaker_primitives: []                     # primitive resources, see "Resources and location constraints"
+pacemaker_location_constraints: []           # location constraints, the same
 pacemaker_join_timeout: 120                  # seconds to wait for quorum, the controller, a node online
 
 pacemaker_rejoin: false                      # true: a timer starts the stack again after a failed start
@@ -99,6 +101,36 @@ pacemaker_rejoin_units:                      # .service or .target names started
 ```
 
 Names are `[A-Za-z][A-Za-z0-9_-]*`; values printable, 1-255 characters; booleans are written `true`/`false`.
+
+### Resources and location constraints
+
+Primitives and location constraints are written from one node with `cibadmin`, never `pcs`: each element is read, created when it is missing, replaced when it differs, and read back, so a rerun changes nothing.
+
+```yaml
+pacemaker_primitives:
+  - id: web-ip                     # [A-Za-z][A-Za-z0-9_.-]*, unique across both lists
+    class: ocf                     # ocf, systemd, lsb or service
+    provider: heartbeat            # ocf only
+    type: IPaddr2                  # checked with crm_resource --show-metadata before any write
+    instance_attributes:           # agent parameters
+      ip: 192.0.2.10
+    meta_attributes:               # e.g. target-role, resource-stickiness
+      resource-stickiness: 100
+    operations:                    # one per name and interval
+      - name: monitor
+        interval: 10s
+        timeout: 20s
+        on_fail: restart           # optional: ignore, block, stop, restart, fence, standby, ask, demote, restart-container
+    state: present                 # absent: stopped first, then removed with its location constraints
+pacemaker_location_constraints:
+  - id: web-ip-on-node-a
+    resource: web-ip
+    node: node-a.example.com       # a cluster node name
+    score: INFINITY                # INFINITY, -INFINITY or an integer
+    state: present                 # absent removes it
+```
+
+An entry dropped from a list is left in the CIB: only `state: absent` removes. The role writes the whole element, so a change made by hand to a managed element (e.g. `target-role` set with `crm_resource`) is undone on the next run. Child ids are derived: `<id>-instance_attributes`, `<id>-meta_attributes`, `<id>-<operation>-interval-<interval>`. A key the role does not know (group, clone, a misspelt name) is refused. Values are printable, never null, without quotes, `<`, `>` or `&`. Whether a change restarts the resource is Pacemaker's call: a changed parameter restarts it, a changed operation timeout does not. Groups, clones, colocation, order constraints and fencing resources are not managed.
 
 ### Diskless SBD
 
@@ -215,7 +247,7 @@ Initialise the device once first (see [SBD with devices](#sbd-with-devices)).
 ./run-tests.sh                     # default scenario, Debian 13
 ./run-tests.sh all                 # every distribution, in parallel
 ./run-tests.sh -s failure debian13 # the failure paths
-tests/validate.test.sh             # the input checks
+tests/validate.test.sh             # the input checks: every rule, trailing and embedded newlines
 ```
 
 | Scenario | What it proves |
@@ -225,6 +257,8 @@ tests/validate.test.sh             # the input checks
 | `sbd-off` | No SBD package or file, `have-watchdog` false; SBD turned on config-only, then off |
 | `sbd-service` | Three nodes, sbd really running on a stand-in character device: the opt-in refused without `pacemaker_allow_restart` with nothing changed, timeouts that do not fit refused, `have-watchdog` true, a changed SBD timeout restarted one node at a time, `pcsd` left alone, an extra package, check mode and reruns change nothing |
 | `rejoin` | Three nodes, sbd running: one node boots with its peers unreachable (iptables, a stand-in for `network-online` that waits for a peer), sbd's start times out, corosync and pacemaker fail as a dependency; once the network is back the node stays out with the timer off, and rejoins by itself with it on; a clean stop is not undone; the timer removed when turned off |
+| `resources` | Two nodes, a Dummy primitive with attributes and two operations, pinned to one node with INFINITY: Started there, the CIB matches the inputs, idempotence; an operation timeout changed writes that primitive only and does not restart it; both entries dropped from the input are left in the CIB with nothing changed; an id with a newline and an unknown agent refused before any write, CIB byte-identical; absent stops it, then deletes it and its location; absent twice changes nothing |
+| `resources-multi` | Three nodes, three primitives (one with no attribute or operation) and INFINITY, -INFINITY and integer scores: each where its locations put it, the CIB matches the inputs, idempotence; a parameter change in check mode writes nothing; the same change writes one primitive and Pacemaker restarts it; a location moved (the primitive follows) and one set absent alone; a meta attribute edited by hand undone; two primitives removed together with their locations, the third kept; the removal again changes nothing |
 | `failure` | A control character, a missing watchdog, a watchdog held by another process (named), an SBD device without a header, corosync stopped on one node: each fails with its message, no property and no SBD file changed |
 
 A container has no watchdog: `sbd` runs on a stand-in character device that never resets the node, and the other scenarios run SBD config-only (`pacemaker_sbd_service: false`). The reset itself is only proven on hosts.

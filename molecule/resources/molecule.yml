@@ -1,0 +1,112 @@
+---
+dependency:
+  name: shell
+  command: sh -c 'ansible-galaxy install -r "$MOLECULE_SCENARIO_DIRECTORY/../shared/collections.yml" -p "$MOLECULE_SCENARIO_DIRECTORY/../shared/roles"'
+driver:
+  name: docker
+# Two nodes with two_node quorum: a Dummy primitive pinned to the second node, changed, dropped, removed
+platforms:
+  - name: pacemaker-a-resources-${MOLECULE_DISTRO:-debian13}
+    hostname: pacemaker-a
+    image: "geerlingguy/docker-${MOLECULE_DISTRO:-debian13}-ansible:latest"
+    command: ${MOLECULE_DOCKER_COMMAND:-""}
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    privileged: true
+    # libqb IPC of corosync and pacemaker lives in /dev/shm: Docker's 64 MB fills up
+    shm_size: 512m
+    pre_build_image: true
+    networks:
+      - name: pacemaker-resources-${MOLECULE_DISTRO:-debian13}
+    groups:
+      - nodes
+  - name: pacemaker-b-resources-${MOLECULE_DISTRO:-debian13}
+    hostname: pacemaker-b
+    image: "geerlingguy/docker-${MOLECULE_DISTRO:-debian13}-ansible:latest"
+    command: ${MOLECULE_DOCKER_COMMAND:-""}
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    privileged: true
+    # libqb IPC of corosync and pacemaker lives in /dev/shm: Docker's 64 MB fills up
+    shm_size: 512m
+    pre_build_image: true
+    networks:
+      - name: pacemaker-resources-${MOLECULE_DISTRO:-debian13}
+    groups:
+      - nodes
+provisioner:
+  name: ansible
+  playbooks:
+    prepare: ../shared/prepare.yml
+    converge: ../shared/converge.yml
+    side_effect: side_effect/playbook.yml
+    cleanup: ../shared/cleanup.yml
+    verify: verify/playbook.yml
+  inventory:
+    group_vars:
+      all:
+        ansible_become: false
+      nodes:
+        molecule_nodeid: "{{ groups['nodes'].index(inventory_hostname) + 1 }}"
+        corosync_cluster_name: molecule
+        corosync_two_node: true
+        corosync_nodes: >-
+          {{ groups['nodes'] | map('extract', hostvars) | map(attribute='molecule_node') | list }}
+        molecule_node:
+          name: "{{ inventory_hostname.split('-')[:2] | join('-') }}"
+          host: "{{ inventory_hostname }}"
+          nodeid: "{{ molecule_nodeid | int }}"
+          addrs:
+            - "{{ ansible_facts.default_ipv4.address }}"
+        pacemaker_sbd_service: false
+        pacemaker_sbd_watchdog_device: /dev/molecule-watchdog
+        pacemaker_sbd_watchdog_timeout: 15
+        pacemaker_sbd_options:
+          SBD_STARTMODE: clean
+        pacemaker_cluster_properties:
+          no-quorum-policy: stop
+          cluster-recheck-interval: 5min
+          stonith-enabled: false
+        pacemaker_resource_defaults:
+          resource-stickiness: 100
+        pacemaker_op_defaults:
+          timeout: 60s
+        pacemaker_primitives:
+          - id: molecule-dummy
+            class: ocf
+            provider: pacemaker
+            type: Dummy
+            instance_attributes:
+              state: /run/molecule-dummy.state
+            meta_attributes:
+              resource-stickiness: 200
+            operations:
+              - name: monitor
+                interval: 10s
+                timeout: 20s
+                on_fail: restart
+              - name: start
+                interval: 0s
+                timeout: 30s
+        pacemaker_location_constraints:
+          - id: molecule-dummy-on-b
+            resource: molecule-dummy
+            node: pacemaker-b
+            score: INFINITY
+verifier:
+  name: ansible
+scenario:
+  name: resources
+  test_sequence:
+    - dependency
+    - destroy
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - side_effect
+    - cleanup
+    - destroy
