@@ -1,0 +1,28 @@
+---
+- name: Verify
+  hosts: nodes
+  gather_facts: false
+  tasks:
+    - name: Every node online with quorum
+      ansible.builtin.include_tasks: ../../shared/online.yml
+
+    - name: The CIB matches the inputs
+      ansible.builtin.include_tasks: ../../shared/cib.yml
+
+    - name: The primitive Started on the second node, both elements in the CIB, read on every node
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          fail() { echo "FAIL: $*"; exit 1; }
+          for i in $(seq 30); do crm_mon -1 | grep -qE 'molecule-dummy.*Started pacemaker-b' && break; sleep 2; done
+          crm_mon -1 | grep -qE 'molecule-dummy[[:space:]]+\(ocf:pacemaker:Dummy\):[[:space:]]+Started pacemaker-b' || fail "not Started on b: $(crm_mon -1)"
+          p=$(cibadmin --query --xpath "//primitive[@id='molecule-dummy']") || fail "no primitive"
+          grep -q 'name="state" value="/run/molecule-dummy.state"' <<<"$p" || fail "instance attribute: $p"
+          grep -q 'name="resource-stickiness" value="200"' <<<"$p" || fail "meta attribute: $p"
+          grep -q 'name="monitor" interval="10s" timeout="20s"' <<<"$p" || fail "monitor op: $p"
+          grep -q 'name="start" interval="0s" timeout="30s"' <<<"$p" || fail "start op: $p"
+          c=$(cibadmin --query --xpath "//rsc_location[@id='molecule-dummy-on-b']") || fail "no location"
+          grep -q 'rsc="molecule-dummy" node="pacemaker-b" score="INFINITY"' <<<"$c" || fail "location: $c"
+      args:
+        executable: /bin/bash
+      changed_when: false

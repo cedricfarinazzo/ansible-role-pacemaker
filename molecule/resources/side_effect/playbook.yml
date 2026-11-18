@@ -1,0 +1,207 @@
+---
+# Reruns from the control node: no change; an operation timeout changed; entries dropped from the input; bad inputs
+# and an unknown agent refused before any write; state absent stops the primitive, then removes it and its locations.
+- name: Resource reruns
+  hosts: nodes
+  gather_facts: false
+  vars:
+    molecule_dummy:
+      id: molecule-dummy
+      class: ocf
+      provider: pacemaker
+      type: Dummy
+      instance_attributes:
+        state: /run/molecule-dummy.state
+      meta_attributes:
+        resource-stickiness: 200
+      operations:
+        - name: monitor
+          interval: 10s
+          timeout: 25s
+        - name: start
+          interval: 0s
+          timeout: 30s
+    molecule_location:
+      id: molecule-dummy-on-b
+      resource: molecule-dummy
+      node: pacemaker-b
+      score: INFINITY
+    molecule_cib: >-
+      cibadmin --query --xpath /cib/configuration/resources; cibadmin --query --xpath /cib/configuration/constraints
+    # The start operation's call id: a new one means Pacemaker restarted the primitive
+    molecule_start_call: >-
+      crm_resource --list-operations --resource molecule-dummy | sed -n 's/.*molecule-dummy_start_0 .*call=\([0-9]*\).*/\1/p'
+  tasks:
+    - name: Rerun with no change
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: no change
+        molecule_args: []
+        molecule_expect: ok
+
+    - name: Nothing changed
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true
+
+    - name: The CIB and the start call before the change  # noqa: command-instead-of-shell
+      ansible.builtin.shell: "{{ molecule_cib }}; echo START=$({{ molecule_start_call }})"
+      register: molecule_before
+      changed_when: false
+      run_once: true
+
+    - name: The monitor timeout changed
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: timeout changed
+        molecule_args:
+          - -e
+          - "{{ {'pacemaker_primitives': [molecule_dummy]} | to_json }}"
+        molecule_expect: ok
+
+    - name: One write, from one node
+      ansible.builtin.assert:
+        that:
+          - molecule_run.stdout | regex_findall('changed=1 ') | length == 1
+          - molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length - 1
+          - molecule_run.stdout is search('replace primitive molecule-dummy')
+          - molecule_run.stdout is not search('(create|replace) rsc_location')
+        fail_msg: "{{ molecule_run.stdout_lines[-30:] }}"
+      run_once: true
+
+    - name: The CIB and the start call after the change  # noqa: command-instead-of-shell
+      ansible.builtin.shell: "{{ molecule_cib }}; echo START=$({{ molecule_start_call }})"
+      register: molecule_after
+      changed_when: false
+      run_once: true
+
+    # Only the monitor op line differs; everything else, the location included, is unchanged
+    - name: Only the monitor operation changed
+      ansible.builtin.assert:
+        that:
+          - molecule_changed | length == 2
+          - molecule_changed[0] is search('name="monitor" interval="10s" timeout="20s"')
+          - molecule_changed[1] is search('name="monitor" interval="10s" timeout="25s"')
+        fail_msg: "{{ molecule_changed }}"
+      vars:
+        molecule_cib_before: "{{ molecule_before.stdout_lines | reject('match', '^START=') | list }}"
+        molecule_cib_after: "{{ molecule_after.stdout_lines | reject('match', '^START=') | list }}"
+        molecule_changed: >-
+          {{ (molecule_cib_before | difference(molecule_cib_after)) + (molecule_cib_after | difference(molecule_cib_before)) }}
+      run_once: true
+
+    - name: Whether Pacemaker restarted the primitive
+      ansible.builtin.debug:
+        msg: >-
+          start call before {{ molecule_before.stdout_lines | select('match', '^START=') | first }},
+          after {{ molecule_after.stdout_lines | select('match', '^START=') | first }}:
+          {{ 'restarted' if (molecule_before.stdout_lines | select('match', '^START=') | first)
+             != (molecule_after.stdout_lines | select('match', '^START=') | first) else 'not restarted' }}
+      run_once: true
+
+    - name: Both entries dropped from the input
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: entries dropped
+        molecule_args:
+          - -e
+          - '{"pacemaker_primitives": [], "pacemaker_location_constraints": []}'
+        molecule_expect: ok
+
+    - name: Left alone, nothing changed
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true
+
+    - name: Still in the CIB  # noqa: command-instead-of-shell
+      ansible.builtin.shell: "{{ molecule_cib }}"
+      register: molecule_kept
+      changed_when: false
+      failed_when: >-
+        molecule_kept.stdout is not search('id="molecule-dummy"') or molecule_kept.stdout is not search('id="molecule-dummy-on-b"')
+      run_once: true
+
+    - name: An invalid id
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: invalid id
+        molecule_args:
+          - -e
+          - "{{ {'pacemaker_primitives': [molecule_dummy | combine({'id': 'molecule-dummy\nx'})]} | to_json }}"
+        molecule_expect: fail
+
+    - name: Refused by the input check, naming the input
+      ansible.builtin.assert:
+        that: molecule_run.stdout is search('pacemaker_primitives \\(molecule-dummy')
+        fail_msg: "{{ molecule_run.stdout_lines[-20:] }}"
+      run_once: true
+
+    - name: An unknown agent
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: unknown agent
+        molecule_args:
+          - -e
+          - "{{ {'pacemaker_primitives': [molecule_dummy | combine({'type': 'MoleculeMissing', 'operations': []})]} | to_json }}"
+        molecule_expect: fail
+
+    - name: Refused before any write, naming the primitive
+      ansible.builtin.assert:
+        that: molecule_run.stdout is search('unknown agent for molecule-dummy')
+        fail_msg: "{{ molecule_run.stdout_lines[-20:] }}"
+      run_once: true
+
+    - name: The CIB after the refused runs  # noqa: command-instead-of-shell
+      ansible.builtin.shell: "{{ molecule_cib }}"
+      register: molecule_refused
+      changed_when: false
+      run_once: true
+
+    - name: The refused runs wrote nothing
+      ansible.builtin.assert:
+        that: molecule_refused.stdout == molecule_after.stdout_lines | reject('match', '^START=') | join('\n')
+        fail_msg: "{{ molecule_refused.stdout }}"
+      run_once: true
+
+    - name: State absent
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: absent
+        molecule_args:
+          - -e
+          - "{{ {'pacemaker_primitives': [molecule_dummy | combine({'state': 'absent'})], 'pacemaker_location_constraints': []} | to_json }}"
+        molecule_expect: ok
+
+    - name: Stopped first, then removed
+      ansible.builtin.assert:
+        that:
+          - molecule_run.stdout is search('Stop molecule-dummy[\s\S]*Wait until stopped everywhere, molecule-dummy[\s\S]*Delete the location constraints of molecule-dummy[\s\S]*Delete molecule-dummy')
+        fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
+      run_once: true
+
+    - name: The primitive and its location gone, the agent stopped
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ molecule_cib }} > /tmp/molecule-cib
+        if grep -q 'molecule-dummy' /tmp/molecule-cib; then echo "FAIL: left in the CIB"; cat /tmp/molecule-cib; exit 1; fi
+        if [ -e /run/molecule-dummy.state ]; then echo "FAIL: the Dummy state file is left (never stopped)"; exit 1; fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Absent again
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: absent again
+        molecule_args:
+          - -e
+          - "{{ {'pacemaker_primitives': [molecule_dummy | combine({'state': 'absent'})], 'pacemaker_location_constraints': []} | to_json }}"
+        molecule_expect: ok
+
+    - name: Absent twice changes nothing
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true

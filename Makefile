@@ -1,7 +1,7 @@
 # Define supported distributions
 SUPPORTED_DISTROS := debian13 ubuntu2404 ubuntu2604
 DEFAULT_DISTRO := debian13
-SCENARIOS := qdevice sbd-off sbd-service failure rejoin
+SCENARIOS := qdevice sbd-off sbd-service failure rejoin resources resources-multi
 
 .PHONY: molecule-test molecule-test-all lint help check-prereqs test $(addprefix molecule-test-,$(SCENARIOS))
 
@@ -16,6 +16,8 @@ help:
 	@echo "  molecule-test-sbd-service  - sbd running, the restart opt-in"
 	@echo "  molecule-test-failure      - The failure paths"
 	@echo "  molecule-test-rejoin       - A boot with the peers unreachable, the rejoin timer"
+	@echo "  molecule-test-resources    - A primitive and a location: changed, dropped, removed"
+	@echo "  molecule-test-resources-multi - Three primitives, every score kind, check mode, removal"
 	@echo "  lint                       - Run ansible-lint"
 	@echo ""
 	@echo "Supported distributions:"

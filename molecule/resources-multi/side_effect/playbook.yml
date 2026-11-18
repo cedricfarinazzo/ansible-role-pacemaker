@@ -1,0 +1,177 @@
+---
+# Reruns from the control node on three primitives: check mode writes nothing; a parameter changed (Pacemaker restarts
+# the primitive); a location moved; one location removed alone; a hand edit undone; two primitives removed together.
+- name: Several resources
+  hosts: nodes
+  gather_facts: false
+  vars:
+    molecule_cib: >-
+      cibadmin --query --xpath /cib/configuration/resources; cibadmin --query --xpath /cib/configuration/constraints
+    molecule_primitives_changed: >-
+      {{ [pacemaker_primitives[0] | combine({'instance_attributes': {'fake': 'uno'}})] + pacemaker_primitives[1:] }}
+    molecule_locations_moved: >-
+      {{ [pacemaker_location_constraints[0] | combine({'node': 'pacemaker-b'})] + pacemaker_location_constraints[1:4]
+         + [pacemaker_location_constraints[4] | combine({'state': 'absent'})] }}
+    molecule_start_call: >-
+      crm_resource --list-operations --resource molecule-one | sed -n 's/.*molecule-one_start_0 .*call=\([0-9]*\).*/\1/p'
+  tasks:
+    - name: The CIB before check mode  # noqa: command-instead-of-shell
+      ansible.builtin.shell: "{{ molecule_cib }}; echo START=$({{ molecule_start_call }})"
+      register: molecule_before
+      changed_when: false
+      run_once: true
+
+    - name: A parameter changed, in check mode
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: check mode
+        molecule_args:
+          - --check
+          - -e
+          - "{{ {'pacemaker_primitives': molecule_primitives_changed} | to_json }}"
+        molecule_expect: ok
+
+    - name: The CIB after check mode  # noqa: command-instead-of-shell
+      ansible.builtin.shell: "{{ molecule_cib }}; echo START=$({{ molecule_start_call }})"
+      register: molecule_checked
+      changed_when: false
+      run_once: true
+
+    - name: Check mode wrote nothing
+      ansible.builtin.assert:
+        that: molecule_checked.stdout == molecule_before.stdout
+        fail_msg: "{{ molecule_checked.stdout }}"
+      run_once: true
+
+    - name: The parameter changed
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: parameter changed
+        molecule_args:
+          - -e
+          - "{{ {'pacemaker_primitives': molecule_primitives_changed} | to_json }}"
+        molecule_expect: ok
+
+    - name: Only that primitive written, from one node
+      ansible.builtin.assert:
+        that:
+          - molecule_run.stdout | regex_findall('changed=1 ') | length == 1
+          - molecule_run.stdout is search('replace primitive molecule-one')
+          - molecule_run.stdout is not search('replace primitive molecule-(two|bare)')
+        fail_msg: "{{ molecule_run.stdout_lines[-30:] }}"
+      run_once: true
+
+    - name: The new parameter in the CIB
+      ansible.builtin.include_tasks: ../../shared/cib.yml
+      vars:
+        molecule_primitives: "{{ molecule_primitives_changed }}"
+
+    - name: The start call after the change
+      ansible.builtin.shell: "echo START=$({{ molecule_start_call }})"
+      register: molecule_after
+      changed_when: false
+      run_once: true
+
+    - name: A changed parameter restarts the primitive (Pacemaker's own rule)
+      ansible.builtin.assert:
+        that: molecule_after.stdout_lines[-1] != (molecule_before.stdout_lines | select('match', '^START=') | first)
+        fail_msg: "start call before {{ molecule_before.stdout_lines[-1] }}, after {{ molecule_after.stdout_lines[-1] }}"
+      run_once: true
+
+    - name: A location moved, another set absent
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: locations
+        molecule_args:
+          - -e
+          - "{{ {'pacemaker_primitives': molecule_primitives_changed, 'pacemaker_location_constraints': molecule_locations_moved} | to_json }}"
+        molecule_expect: ok
+
+    - name: The locations in the CIB, the primitives kept
+      ansible.builtin.include_tasks: ../../shared/cib.yml
+      vars:
+        molecule_primitives: "{{ molecule_primitives_changed }}"
+        molecule_locations: "{{ molecule_locations_moved }}"
+
+    - name: Molecule-one moved to the second node, molecule-bare still off it
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          where() { crm_mon -1 | sed -n "s/^ *\* $1[[:space:]].*Started \(pacemaker-[a-z]\).*/\1/p"; }
+          for i in $(seq 30); do [ "$(where molecule-one)" = pacemaker-b ] && break; sleep 2; done
+          [ "$(where molecule-one)" = pacemaker-b ] || { echo "FAIL: one: $(crm_mon -1)"; exit 1; }
+          [ "$(where molecule-bare)" != pacemaker-b ] || { echo "FAIL: bare on b"; exit 1; }
+      args:
+        executable: /bin/bash
+      changed_when: false
+      run_once: true
+
+    - name: A meta attribute edited by hand
+      ansible.builtin.command: crm_resource --resource molecule-two --meta --set-parameter migration-threshold --parameter-value 9
+      changed_when: true
+      run_once: true
+
+    - name: The same inputs again
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: hand edit
+        molecule_args:
+          - -e
+          - "{{ {'pacemaker_primitives': molecule_primitives_changed, 'pacemaker_location_constraints': molecule_locations_moved} | to_json }}"
+        molecule_expect: ok
+
+    - name: The hand edit undone, nothing else written
+      ansible.builtin.assert:
+        that:
+          - molecule_run.stdout | regex_findall('changed=1 ') | length == 1
+          - molecule_run.stdout is search('replace primitive molecule-two')
+          - molecule_run.stdout is not search('replace primitive molecule-(one|bare)')
+        fail_msg: "{{ molecule_run.stdout_lines[-30:] }}"
+      run_once: true
+
+    - name: The input value back in the CIB
+      ansible.builtin.include_tasks: ../../shared/cib.yml
+      vars:
+        molecule_primitives: "{{ molecule_primitives_changed }}"
+        molecule_locations: "{{ molecule_locations_moved }}"
+
+    - name: Two primitives removed together
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: two absent
+        molecule_args:
+          - -e
+          - >-
+            {{ {'pacemaker_primitives': [molecule_primitives_changed[0], molecule_primitives_changed[1] | combine({'state': 'absent'}),
+                molecule_primitives_changed[2] | combine({'state': 'absent'})],
+                'pacemaker_location_constraints': [molecule_locations_moved[0]]} | to_json }}
+        molecule_expect: ok
+
+    - name: Both gone with their locations, molecule-one kept
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          x=$({{ molecule_cib }})
+          if grep -qE 'molecule-(two|bare)' <<<"$x"; then echo "FAIL: left"; echo "$x"; exit 1; fi
+          grep -q 'id="molecule-one"' <<<"$x" && grep -q 'id="molecule-one-on-a"' <<<"$x" || { echo "FAIL: one"; exit 1; }
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: The removal again
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: two absent again
+        molecule_args:
+          - -e
+          - >-
+            {{ {'pacemaker_primitives': [molecule_primitives_changed[0], molecule_primitives_changed[1] | combine({'state': 'absent'}),
+                molecule_primitives_changed[2] | combine({'state': 'absent'})],
+                'pacemaker_location_constraints': [molecule_locations_moved[0]]} | to_json }}
+        molecule_expect: ok
+
+    - name: The removal again changes nothing
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true
