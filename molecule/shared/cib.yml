@@ -17,7 +17,7 @@
       {% endfor %}
       [ "$(grep -c '<op ' <<<"$x")" = "{{ p.operations | default([]) | length }}" ] || fail "{{ p.id }} operation count: $x"
       {% for o in p.operations | default([]) %}
-      grep -q 'name="{{ o.name }}" interval="{{ o.interval }}" timeout="{{ o.timeout }}"' <<<"$x" || fail "{{ p.id }} {{ o.name }}: $x"
+      grep -q 'name="{{ o.name }}" interval="{{ o.interval }}" timeout="{{ o.timeout }}"{{ ' on-fail="' ~ o.on_fail ~ '"' if o.on_fail is defined else '' }}' <<<"$x" || fail "{{ p.id }} {{ o.name }}: $x"
       {% endfor %}
       {% endfor %}
       {% for p in molecule_primitives if p.state | default('present') == 'absent' %}

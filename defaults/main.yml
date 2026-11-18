@@ -34,7 +34,7 @@ pacemaker_resource_defaults: {}
 pacemaker_op_defaults: {}
 
 # Primitive resources, written once from one node: {id, class (ocf|systemd|lsb|service), provider (ocf only), type,
-# instance_attributes: {}, meta_attributes: {}, operations: [{name, interval, timeout}], state: present|absent}.
+# instance_attributes: {}, meta_attributes: {}, operations: [{name, interval, timeout, on_fail}], state: present|absent}.
 # An entry dropped from the list is left in the CIB: only state absent stops and removes it, with its locations
 pacemaker_primitives: []
 # Location constraints: {id, resource, node, score (INFINITY, -INFINITY or an integer), state: present|absent}

@@ -17,7 +17,8 @@
         if p.operations | default([]) | length > 0 %}{% set ns.x = ns.x ~ '<operations>' %}{%
           for o in p.operations %}{% set ns.x = ns.x ~ '<op id="' ~ p.id ~ '-' ~ o.name ~ '-interval-'
             ~ o.interval | default('0') ~ '" name="' ~ o.name ~ '" interval="' ~ o.interval | default('0') ~ '"'
-            ~ (' timeout="' ~ o.timeout ~ '"' if o.timeout is defined else '') ~ '/>' %}{% endfor %}{%
+            ~ (' timeout="' ~ o.timeout ~ '"' if o.timeout is defined else '')
+            ~ (' on-fail="' ~ o.on_fail ~ '"' if o.on_fail is defined else '') ~ '/>' %}{% endfor %}{%
           set ns.x = ns.x ~ '</operations>' %}{% endif %}{%
         set _ = e.append({'kind': 'primitive', 'id': p.id, 'scope': 'resources', 'xml': ns.x ~ '</primitive>' if ns.x[-1:] == '>' and ns.x.count('<') > 1 else ns.x[:-1] ~ '/>',
           'xpath': "/cib/configuration/resources/primitive[@id='" ~ p.id ~ "']"}) %}{% endfor %}{%

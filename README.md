@@ -120,6 +120,7 @@ pacemaker_primitives:
       - name: monitor
         interval: 10s
         timeout: 20s
+        on_fail: restart           # optional: ignore, block, stop, restart, fence, standby, ask, demote, restart-container
     state: present                 # absent: stopped first, then removed with its location constraints
 pacemaker_location_constraints:
   - id: web-ip-on-node-a
@@ -129,7 +130,7 @@ pacemaker_location_constraints:
     state: present                 # absent removes it
 ```
 
-An entry dropped from a list is left in the CIB: only `state: absent` removes. The role writes the whole element, so a change made by hand to a managed element (e.g. `target-role` set with `crm_resource`) is undone on the next run. Child ids are derived: `<id>-instance_attributes`, `<id>-meta_attributes`, `<id>-<operation>-interval-<interval>`. Values are printable, without quotes, `<`, `>` or `&`. Whether a change restarts the resource is Pacemaker's call: a changed parameter restarts it, a changed operation timeout does not. Groups, clones, colocation, order constraints and fencing resources are not managed.
+An entry dropped from a list is left in the CIB: only `state: absent` removes. The role writes the whole element, so a change made by hand to a managed element (e.g. `target-role` set with `crm_resource`) is undone on the next run. Child ids are derived: `<id>-instance_attributes`, `<id>-meta_attributes`, `<id>-<operation>-interval-<interval>`. A key the role does not know (group, clone, a misspelt name) is refused. Values are printable, never null, without quotes, `<`, `>` or `&`. Whether a change restarts the resource is Pacemaker's call: a changed parameter restarts it, a changed operation timeout does not. Groups, clones, colocation, order constraints and fencing resources are not managed.
 
 ### Diskless SBD
 

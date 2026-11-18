@@ -86,6 +86,7 @@ provisioner:
               - name: monitor
                 interval: 10s
                 timeout: 20s
+                on_fail: restart
               - name: start
                 interval: 0s
                 timeout: 30s
