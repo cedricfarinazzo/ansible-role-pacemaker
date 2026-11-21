@@ -13,7 +13,7 @@ Public Ansible role `cedricfarinazzo.pacemaker` (Ansible Galaxy): Pacemaker on a
 - `tasks/main.yml` — `validate.yml` (every input), then for `present`: `corosync.yml` (corosync active and quorate on every play host, before any change), `install.yml` (packages, `pcsd` masked, `openipmi` masked on opt-in), `restart_check.yml` (a stack restart refused on every node unless `pacemaker_allow_restart`, before any package), `sbd.yml` (watchdog checks, device headers, `/etc/default/sbd`, rolling stack restart) or `sbd_off.yml`, `service.yml` (pacemaker running, every node online), `rejoin.yml` (the opt-in rejoin timer, or its removal), `properties.yml` (read, write the differences, read back; run_once), `resources.yml` (primitives and location constraints: agents checked, each element queried, created or replaced, read back; `resource_absent.yml` stops a primitive before deleting it and its locations; run_once); for `absent`: `absent.yml`.
 - `templates/sbd.j2` — `/etc/default/sbd`; `pacemaker-rejoin.{service,timer}.j2` — the timer that restarts a failed stack start.
 - `meta/main.yml` — Galaxy metadata; `platforms` lists exactly what CI tests.
-- `molecule/shared/` — `collections.yml` (the docker driver and the corosync role's release tag), `prepare.yml` (policy-rc.d removed, a stand-in watchdog character device, qnetd on the `qnetd` group), `converge.yml` (corosync role, then this one), `run.sh` and `recap.yml` (a rerun from the control node, its recap checked), `online.yml`, `cib.yml` (the CIB matches the resource inputs, on every node).
+- `molecule/shared/` — `collections.yml` (the docker driver and the corosync role's release tag), `prepare.yml` (policy-rc.d removed, a stand-in watchdog character device, qnetd on the `qnetd` group), `converge.yml` (corosync role, then this one), `run.sh` and `recap.yml` (a rerun from the control node, its recap checked), `online.yml`, `cib.yml` (the CIB matches the resource inputs, on every node), `cleanup.yml` (the cluster services stopped) and `destroy.yml` (the driver's destroy with a 300 s API timeout and retries), used by every scenario.
 - `molecule/default/` — three nodes, every distribution; reruns: no change, check mode, properties changed and deleted, absent twice.
 - `molecule/qdevice/` — two nodes and a qnetd host; a node down and back.
 - `molecule/sbd-off/` — no SBD; SBD on config-only and off again.
@@ -72,6 +72,7 @@ Public Ansible role `cedricfarinazzo.pacemaker` (Ansible Galaxy): Pacemaker on a
 - `item.values` in Jinja is the dict method, not a key: the CIB set's key is `settings`.
 - A container has no watchdog: `sbd` runs on a `mknod` character device (`/dev/null`'s numbers) with `sbd-service`; the other scenarios use `pacemaker_sbd_service: false`.
 - Docker's 64 MB `/dev/shm` fills with corosync's and pacemaker's libqb buffers ("Cannot initialise VOTEQUORUM service", "No space left on device" in corosync's journal): every platform sets `shm_size: 512m`.
+- Docker can take over 60 s to remove a systemd container, even with the cluster services stopped: the driver's destroy fails with `Error removing container ... Read timed out. (read timeout=60)` and a rerun passes. Every scenario uses `molecule/shared/destroy.yml` (`timeout: 300`, retried).
 
 ## Self Improvement Loop
 
