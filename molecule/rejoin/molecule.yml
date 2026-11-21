@@ -87,6 +87,7 @@ provisioner:
           SBD_OPTS: -T
         pacemaker_rejoin: true
         pacemaker_rejoin_interval: 10
+        pacemaker_rejoin_log_level_max: notice
         pacemaker_cluster_properties:
           stonith-enabled: true
           stonith-watchdog-timeout: 20

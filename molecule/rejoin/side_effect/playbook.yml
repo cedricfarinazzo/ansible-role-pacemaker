@@ -151,10 +151,11 @@
         molecule_label: interval changed
         molecule_args:
           - -e
-          - '{"pacemaker_rejoin_interval": 15}'
+          - '{"pacemaker_rejoin_interval": 15, "pacemaker_rejoin_log_level_max": ""}'
         molecule_expect: ok
 
-    - name: The running timer takes the new interval
+    # With the log level emptied, the runs log again: the silence verify sees comes from LogLevelMax
+    - name: The running timer takes the new interval, its runs logged again
       ansible.builtin.shell:
         cmd: |
           set -o pipefail
@@ -162,6 +163,10 @@
           grep -qx 'OnUnitInactiveSec=15' /etc/systemd/system/pacemaker-rejoin.timer || { echo "FAIL: file"; exit 1; }
           systemctl show pacemaker-rejoin.timer -p TimersMonotonic --value | grep -q 'OnUnitInactiveUSec=15s' \
             || { echo "FAIL: loaded: $(systemctl show pacemaker-rejoin.timer -p TimersMonotonic --value)"; exit 1; }
+          ! grep -q '^LogLevelMax=' /etc/systemd/system/pacemaker-rejoin.service || { echo "FAIL: LogLevelMax kept"; exit 1; }
+          since=$(date '+%Y-%m-%d %H:%M:%S'); sleep 17
+          [ "$(journalctl -q -u pacemaker-rejoin.service --since "$since" | wc -l)" -gt 0 ] \
+            || { echo "FAIL: no journal line from a run without LogLevelMax"; exit 1; }
       args:
         executable: /bin/bash
       changed_when: false
