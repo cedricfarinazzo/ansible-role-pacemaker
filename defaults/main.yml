@@ -5,7 +5,7 @@ pacemaker_state: present
 # Extra packages, e.g. resource agents or fence agents
 pacemaker_packages_extra: []
 
-# pcsd rewrites corosync.conf and listens on TCP 2224: masked; false leaves it as its package set it
+# pcsd rewrites corosync.conf and listens on TCP 2224: it and its backend pcsd-ruby masked; false leaves them as set
 pacemaker_pcsd_masked: true
 # openipmi.service (installed through ipmitool's Recommends) fails at boot on a host without IPMI hardware: true masks it
 pacemaker_openipmi_masked: false

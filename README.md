@@ -48,11 +48,12 @@ ansible-galaxy role install -r requirements.yml
 The role will:
 - ✅ Check every input before any change (anchored patterns, no control character in any value)
 - ✅ Check that corosync runs and is quorate on every node of the play, before any package, service or CIB change: one node down or unreachable stops the role on every node, with nothing changed
-- ✅ Install `pacemaker`, `pacemaker-cli-utils`, `pcs`, `psmisc` (and `sbd`), mask `pcsd` (nothing listens on TCP 2224); optionally mask `openipmi`, which `ipmitool` recommends and which fails at boot on a host without IPMI hardware
+- ✅ Install `pacemaker`, `pacemaker-cli-utils`, `pcs`, `psmisc` (and `sbd`), mask `pcsd` and its backend `pcsd-ruby` (nothing listens on TCP 2224); optionally mask `openipmi`, which `ipmitool` recommends and which fails at boot on a host without IPMI hardware
 - ✅ With SBD: refuse a watchdog path that is no character device, or that a process other than `sbd` holds (the message names it); refuse SBD devices without an SBD header; write `/etc/default/sbd`; enable `sbd` with corosync
 - ✅ Refuse, before any change, a new or changed SBD configuration (it restarts the stack, and a node's resources stop while it restarts) unless `pacemaker_allow_restart: true`; with it, restart the stack on every node, one node at a time, each back in a quorate partition with `sbd` running before the next (Pacemaker reads `have-watchdog` at its start)
 - ✅ Start Pacemaker and wait until every node of the play, by its name in the running membership (`crm_node -n`), is online in a partition with quorum
 - ✅ Read each wanted CIB value with `crm_attribute`, write only those that differ (a rerun changes nothing), from one node, and read them back
+- ✅ In check mode, report each pending `pcsd` mask, CIB value and CIB element write or removal as changed, writing nothing: a converged cluster checks with `changed=0`
 
 ## 📋 Requirements
 
@@ -76,7 +77,7 @@ The scenarios beyond the default one run on Debian 13.
 ```yaml
 pacemaker_state: present                     # absent: stop, purge, remove the CIB and /etc/default/sbd
 pacemaker_packages_extra: []                 # e.g. fence-agents
-pacemaker_pcsd_masked: true                  # false leaves pcsd as its package set it
+pacemaker_pcsd_masked: true                  # pcsd and pcsd-ruby masked; false leaves them as their package set them
 pacemaker_openipmi_masked: false             # true masks openipmi.service (fails at boot without IPMI hardware)
 
 pacemaker_sbd: true                          # false: no SBD (fence agents instead)
@@ -252,13 +253,13 @@ tests/validate.test.sh             # the input checks: every rule, trailing and 
 
 | Scenario | What it proves |
 |----------|----------------|
-| `default` | Three nodes: check mode, idempotence, properties and defaults written lower case and read back on every node, a change and a delete written once, absent twice with Corosync still quorate |
+| `default` | Three nodes: check mode (converged; a pending `pcsd-ruby` mask and pending properties reported, nothing written), idempotence, properties and defaults written lower case and read back on every node, a change and a delete written once, absent twice with Corosync still quorate |
 | `qdevice` | Two nodes and a qnetd host: a node down leaves the other quorate, the rerun changes nothing |
 | `sbd-off` | No SBD package or file, `have-watchdog` false; SBD turned on config-only, then off |
 | `sbd-service` | Three nodes, sbd really running on a stand-in character device: the opt-in refused without `pacemaker_allow_restart` with nothing changed, timeouts that do not fit refused, `have-watchdog` true, a changed SBD timeout restarted one node at a time, `pcsd` left alone, an extra package, check mode and reruns change nothing |
 | `rejoin` | Three nodes, sbd running: one node boots with its peers unreachable (iptables, a stand-in for `network-online` that waits for a peer), sbd's start times out, corosync and pacemaker fail as a dependency; once the network is back the node stays out with the timer off, and rejoins by itself with it on; a clean stop is not undone; the timer removed when turned off |
 | `resources` | Two nodes, a Dummy primitive with attributes and two operations, pinned to one node with INFINITY: Started there, the CIB matches the inputs, idempotence; an operation timeout changed writes that primitive only and does not restart it; both entries dropped from the input are left in the CIB with nothing changed; an id with a newline and an unknown agent refused before any write, CIB byte-identical; absent stops it, then deletes it and its location; absent twice changes nothing |
-| `resources-multi` | Three nodes, three primitives (one with no attribute or operation) and INFINITY, -INFINITY and integer scores: each where its locations put it, the CIB matches the inputs, idempotence; a parameter change in check mode writes nothing; the same change writes one primitive and Pacemaker restarts it; a location moved (the primitive follows) and one set absent alone; a meta attribute edited by hand undone; two primitives removed together with their locations, the third kept; the removal again changes nothing |
+| `resources-multi` | Three nodes, three primitives (one with no attribute or operation) and INFINITY, -INFINITY and integer scores: each where its locations put it, the CIB matches the inputs, idempotence; check mode on the converged CIB reports nothing; a parameter change in check mode reports one replace and writes nothing; the same change writes one primitive and Pacemaker restarts it; a location moved (the primitive follows) and one set absent alone; a meta attribute edited by hand undone; two primitives removed together with their locations (reported first in check mode, nothing removed), the third kept; the removal again changes nothing |
 | `failure` | A control character, a missing watchdog, a watchdog held by another process (named), an SBD device without a header, corosync stopped on one node: each fails with its message, no property and no SBD file changed |
 
 A container has no watchdog: `sbd` runs on a stand-in character device that never resets the node, and the other scenarios run SBD config-only (`pacemaker_sbd_service: false`). The reset itself is only proven on hosts.

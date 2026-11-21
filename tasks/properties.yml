@@ -34,9 +34,21 @@
   ansible.builtin.set_fact:
     __pacemaker_cib_changes: >-
       {% set c = [] %}{% for r in __pacemaker_cib_read.results | default([]) if r is not skipped %}{% set cur =
-        r.stdout | trim if r.rc == 0 else none %}{% if cur != r.item.value %}{% set _ = c.append(r.item) %}{% endif
+        r.stdout | trim if r.rc == 0 else none %}{% if cur != r.item.value %}{% set _ = c.append(r.item | combine({'current': cur}))
+      %}{% endif
       %}{% endfor %}{{ c }}
   run_once: true
+
+# The write is skipped in check mode (a command without creates): each pending value reported changed here instead
+- name: CIB values check mode would write
+  ansible.builtin.debug:
+    msg: "{{ item.type }} {{ item.name }}: {{ item.current | default('(not set)', true) }} -> {{ item.value | default('(deleted)', true) }}"
+  loop: "{{ __pacemaker_cib_changes }}"
+  loop_control:
+    label: "{{ item.type }} {{ item.name }}"
+  changed_when: true
+  run_once: true
+  when: ansible_check_mode
 
 - name: Write the CIB values that differ
   ansible.builtin.command:

@@ -1,6 +1,6 @@
 ---
-# Reruns from the control node: no change, check mode, a property changed and one deleted with a rerun that
-# changes nothing, then absent with Corosync left running.
+# Reruns from the control node: no change, check mode (converged, a pcsd-ruby mask pending, properties pending), a
+# property changed and one deleted with a rerun that changes nothing, then absent with Corosync left running.
 - name: Reruns
   hosts: nodes
   gather_facts: false
@@ -31,6 +31,82 @@
         that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
         fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
       run_once: true
+
+    - name: The pcsd backend unmasked by hand  # noqa: command-instead-of-module
+      ansible.builtin.command: systemctl unmask pcsd-ruby.service
+      changed_when: true
+
+    - name: Check mode with the backend unmasked
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: check mode, mask pending
+        molecule_args:
+          - --check
+        molecule_expect: ok
+
+    - name: The pending mask reported on every node, and only it
+      ansible.builtin.assert:
+        that:
+          - molecule_run.stdout | regex_findall('changed=1 ') | length == groups['nodes'] | length
+          - >-
+            molecule_run.stdout | regex_findall('changed: \[[^]]+\] => \(item=pcsd-ruby.service\)') | length
+            == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-30:] }}"
+      run_once: true
+
+    - name: Check mode masked nothing  # noqa: command-instead-of-module
+      ansible.builtin.command: systemctl is-enabled pcsd-ruby.service
+      register: molecule_ruby
+      changed_when: false
+      failed_when: molecule_ruby.stdout == 'masked'
+
+    - name: The backend masked again
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: mask again
+        molecule_args: []
+        molecule_expect: ok
+
+    - name: Masked, inactive
+      ansible.builtin.shell:
+        cmd: |
+          [ "$(systemctl is-enabled pcsd-ruby.service 2>&1)" = masked ] || { echo "not masked"; exit 1; }
+          ! systemctl is-active --quiet pcsd-ruby.service || { echo "still active"; exit 1; }
+      changed_when: false
+
+    - name: A property changed, one deleted, a default added, in check mode
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: properties, check mode
+        molecule_args:
+          - --check
+          - -e
+          - '{"pacemaker_cluster_properties": {"no-quorum-policy": "freeze", "cluster-recheck-interval": null, "stonith-enabled": false}, "pacemaker_resource_defaults": {"resource-stickiness": 100, "migration-threshold": 3}}'
+        molecule_expect: ok
+
+    - name: Each pending value reported once, from one node
+      ansible.builtin.assert:
+        that:
+          - molecule_run.stdout | regex_findall('changed=1 ') | length == 1
+          - molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length - 1
+          - molecule_run.stdout is search('crm_config no-quorum-policy. stop -> freeze')
+          - molecule_run.stdout is search('crm_config cluster-recheck-interval. 5min -> \(deleted\)')
+          - molecule_run.stdout is search('rsc_defaults migration-threshold. \(not set\) -> 3')
+        fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
+      run_once: true
+
+    - name: Check mode wrote no value
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          fail() { echo "FAIL: $*"; exit 1; }
+          q() { crm_attribute --type "$1" --name "$2" --query --quiet 2>/dev/null; }
+          [ "$(q crm_config no-quorum-policy)" = stop ] || fail "no-quorum-policy written"
+          [ "$(q crm_config cluster-recheck-interval)" = 5min ] || fail "cluster-recheck-interval deleted"
+          if q rsc_defaults migration-threshold; then fail "migration-threshold written"; fi
+      args:
+        executable: /bin/bash
+      changed_when: false
 
     - name: A property changed, one deleted, a default added
       ansible.builtin.include_tasks: ../../shared/recap.yml
