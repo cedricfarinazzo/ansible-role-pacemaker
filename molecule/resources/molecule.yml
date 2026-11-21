@@ -43,6 +43,7 @@ provisioner:
     converge: ../shared/converge.yml
     side_effect: side_effect/playbook.yml
     cleanup: ../shared/cleanup.yml
+    destroy: ../shared/destroy.yml
     verify: verify/playbook.yml
   inventory:
     group_vars:

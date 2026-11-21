@@ -1,0 +1,40 @@
+---
+# The docker driver's destroy, with a 5 min API timeout and retries: removing a systemd container can outlast the
+# driver's fixed 60 s read timeout ("Error removing container ... Read timed out"), so a slow removal is waited for
+- name: Destroy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Remove the containers
+      community.docker.docker_container:
+        name: "{{ item.name }}"
+        state: absent
+        force_kill: true
+        keep_volumes: false
+        timeout: 300
+      loop: "{{ molecule_yml.platforms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: molecule_removed
+      until: molecule_removed is not failed
+      retries: 5
+      delay: 10
+
+    - name: Read the networks
+      community.docker.docker_network_info:
+        name: "{{ item }}"
+      loop: "{{ molecule_yml.platforms | map(attribute='networks', default=[]) | flatten | map(attribute='name') | unique }}"
+      register: molecule_networks
+
+    - name: Remove the networks Molecule created
+      community.docker.docker_network:
+        name: "{{ item.item }}"
+        state: absent
+        timeout: 300
+      loop: "{{ molecule_networks.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when:
+        - item.exists
+        - (item.network.Labels | default({}, true)).owner | default('') == 'molecule'
