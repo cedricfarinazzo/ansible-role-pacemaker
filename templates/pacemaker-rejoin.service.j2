@@ -9,3 +9,6 @@ After=network.target
 Type=oneshot
 ExecCondition=/bin/systemctl is-failed --quiet sbd.service corosync.service pacemaker.service
 ExecStart=/bin/systemctl start --no-block {{ pacemaker_rejoin_units | join(' ') }}
+{% if pacemaker_rejoin_log_level_max | length > 0 %}
+LogLevelMax={{ pacemaker_rejoin_log_level_max }}
+{% endif %}

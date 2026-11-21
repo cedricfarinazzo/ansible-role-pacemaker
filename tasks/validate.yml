@@ -16,12 +16,14 @@
       - pacemaker_rejoin_units is sequence and pacemaker_rejoin_units is not string and pacemaker_rejoin_units is not mapping
       - pacemaker_rejoin_units | length > 0
       - pacemaker_rejoin_units | map('string') | reject('match', '^[A-Za-z0-9][A-Za-z0-9@_.:-]{0,250}\.(service|target)\Z') | list | length == 0
+      - pacemaker_rejoin_log_level_max is string
+      - pacemaker_rejoin_log_level_max is match('^(emerg|alert|crit|err|warning|notice|info|debug|[0-7])?\Z')
     fail_msg: >-
       pacemaker_state present|absent; pacemaker_packages_extra a list of package names; pacemaker_pcsd_masked,
       pacemaker_openipmi_masked, pacemaker_sbd, pacemaker_sbd_service, pacemaker_allow_restart, pacemaker_rejoin booleans;
       pacemaker_join_timeout seconds, 1-99999; pacemaker_rejoin_interval seconds, 5-99999 (under 5 the oneshot
       service hits systemd's start limit, 5 starts in 10 s); pacemaker_rejoin_units a non-empty list of
-      .service or .target names
+      .service or .target names; pacemaker_rejoin_log_level_max empty or a syslog level (emerg..debug, 0-7)
     quiet: true
 
 - name: SBD settings are sound

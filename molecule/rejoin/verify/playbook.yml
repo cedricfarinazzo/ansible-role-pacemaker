@@ -21,3 +21,19 @@
       args:
         executable: /bin/bash
       changed_when: false
+
+    # LogLevelMax=notice also drops systemd's own info lines about the unit: two firings, no journal line
+    - name: The rejoin runs log nothing at notice
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          fail() { echo "FAIL: $*"; exit 1; }
+          [ "$(systemctl show -P LogLevelMax pacemaker-rejoin.service)" = 5 ] || fail "LogLevelMax not notice"
+          t() { systemctl show pacemaker-rejoin.timer -p LastTriggerUSecMonotonic --value; }
+          since=$(date '+%Y-%m-%d %H:%M:%S'); a=$(t); sleep 23; b=$(t)
+          [ "$a" != "$b" ] || fail "the timer did not fire: $a"
+          n=$(journalctl -q -u pacemaker-rejoin.service --since "$since" | wc -l)
+          [ "$n" = 0 ] || fail "$n journal lines: $(journalctl -q -u pacemaker-rejoin.service --since "$since" | head -3)"
+      args:
+        executable: /bin/bash
+      changed_when: false

@@ -25,6 +25,19 @@
         fail_msg: "{{ molecule_run.stdout_lines[-20:] }}"
       run_once: true
 
+    - name: A rejoin log level with a trailing newline
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: log level newline
+        molecule_args: "{{ molecule_changes + ['-e', {'pacemaker_rejoin_log_level_max': 'notice\n'} | to_json] }}"
+        molecule_expect: fail
+
+    - name: Refused by the input check, naming the log level
+      ansible.builtin.assert:
+        that: molecule_run.stdout is search('pacemaker_rejoin_log_level_max empty or a syslog level')
+        fail_msg: "{{ molecule_run.stdout_lines[-20:] }}"
+      run_once: true
+
     - name: The watchdog device missing
       ansible.builtin.include_tasks: ../../shared/recap.yml
       vars:

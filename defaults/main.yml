@@ -48,6 +48,9 @@ pacemaker_rejoin_interval: 60
 # Units started on a retry: the stack comes up through pacemaker's dependencies; add e.g. corosync-qdevice.service
 pacemaker_rejoin_units:
   - pacemaker.service
+# Highest journal priority kept from the rejoin service, systemd's own Starting/Finished lines about it included
+# (LogLevelMax=, e.g. notice drops those info lines every interval); empty logs everything
+pacemaker_rejoin_log_level_max: ""
 
 # Seconds to wait for a node to rejoin after a stack restart, and for every node to be online
 pacemaker_join_timeout: 120
