@@ -87,6 +87,17 @@
           set _ = c.append(r.item | combine({'action': 'replace'})) %}{% endif %}{% endfor %}{{ c }}
   run_once: true
 
+# The writes are skipped in check mode (commands without creates): each pending one reported changed here instead
+- name: CIB elements check mode would write
+  ansible.builtin.debug:
+    msg: "{{ item.action }} {{ item.kind }} {{ item.id }}: {{ item.xml }}"
+  loop: "{{ __pacemaker_element_changes }}"
+  loop_control:
+    label: "{{ item.action }} {{ item.kind }} {{ item.id }}"
+  changed_when: true
+  run_once: true
+  when: ansible_check_mode
+
 - name: Create the missing elements, replace the ones that differ
   ansible.builtin.command:
     argv: >-
@@ -157,6 +168,18 @@
   failed_when: __pacemaker_absent_read.rc not in [0] + __pacemaker_unset_rc
   check_mode: false
   run_once: true
+
+- name: CIB elements check mode would remove
+  ansible.builtin.debug:
+    msg: "remove {{ item }}"
+  loop: >-
+    {{ __pacemaker_location_absent_read.results | default([]) | selectattr('rc', 'defined') | selectattr('rc', '==', 0)
+       | map(attribute='item') | map('regex_replace', '^', 'rsc_location ') | list
+       + __pacemaker_absent_read.results | default([]) | selectattr('rc', 'defined') | selectattr('rc', '==', 0)
+       | map(attribute='item') | map('regex_replace', '^', 'primitive (stopped first, with its locations) ') | list }}
+  changed_when: true
+  run_once: true
+  when: ansible_check_mode
 
 - name: Remove a primitive, stopped first
   ansible.builtin.include_tasks: resource_absent.yml

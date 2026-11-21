@@ -32,6 +32,8 @@
           if grep -q '^SBD_DEVICE' /etc/default/sbd; then fail "SBD_DEVICE set for diskless"; fi
           [ "$(systemctl is-enabled sbd.service)" = disabled ] || fail "sbd enabled in config-only mode"
           [ "$(systemctl is-enabled pcsd.service 2>&1)" = masked ] || fail "pcsd: $(systemctl is-enabled pcsd.service 2>&1)"
+          [ "$(systemctl is-enabled pcsd-ruby.service 2>&1)" = masked ] || fail "pcsd-ruby: $(systemctl is-enabled pcsd-ruby.service 2>&1)"
+          if systemctl is-active --quiet pcsd-ruby.service; then fail "pcsd-ruby active"; fi
           if ss -ltnH 'sport = :2224' | grep -q .; then fail "something listens on 2224"; fi
           [ "$(systemctl is-enabled pacemaker.service)" = enabled ] || fail "pacemaker not enabled"
       args:

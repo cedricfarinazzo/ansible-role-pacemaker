@@ -6,12 +6,13 @@
     update_cache: true
     cache_valid_time: 3600
 
-# pcsd rewrites corosync.conf and listens on TCP 2224; the pcs CLI stays for read-only "pcs status". systemctl,
-# not the module: the corosync role may have masked it first, and the module refuses to mask an absent unit
-- name: Mask pcsd  # noqa: command-instead-of-module
-  ansible.builtin.command: systemctl mask --now pcsd.service
+# pcsd rewrites corosync.conf and listens on TCP 2224, pcsd-ruby is its backend; the pcs CLI stays for "pcs status".
+# systemctl, not the module: the module refuses to mask an absent unit. creates: check mode reports a pending mask
+- name: Mask pcsd and its Ruby backend  # noqa: command-instead-of-module
+  ansible.builtin.command: systemctl mask --now {{ item }}
   args:
-    creates: /etc/systemd/system/pcsd.service
+    creates: /etc/systemd/system/{{ item }}
+  loop: "{{ __pacemaker_pcsd_units }}"
   when: pacemaker_pcsd_masked
 
 # A unit that already failed stays listed as failed until reset; no IPMI device means nothing to lose

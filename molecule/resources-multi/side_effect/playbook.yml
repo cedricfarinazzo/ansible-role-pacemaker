@@ -1,6 +1,7 @@
 ---
-# Reruns from the control node on three primitives: check mode writes nothing; a parameter changed (Pacemaker restarts
-# the primitive); a location moved; one location removed alone; a hand edit undone; two primitives removed together.
+# Reruns from the control node on three primitives: check mode writes nothing and reports each pending write; a
+# parameter changed (Pacemaker restarts the primitive); a location moved; one location removed alone; a hand edit
+# undone; two primitives removed together (in check mode first).
 - name: Several resources
   hosts: nodes
   gather_facts: false
@@ -21,6 +22,20 @@
       changed_when: false
       run_once: true
 
+    - name: Check mode on the converged CIB
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: check mode, converged
+        molecule_args:
+          - --check
+        molecule_expect: ok
+
+    - name: Converged, check mode reports nothing
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-30:] }}"
+      run_once: true
+
     - name: A parameter changed, in check mode
       ansible.builtin.include_tasks: ../../shared/recap.yml
       vars:
@@ -37,10 +52,14 @@
       changed_when: false
       run_once: true
 
-    - name: Check mode wrote nothing
+    - name: Check mode wrote nothing, reported the one pending replace
       ansible.builtin.assert:
-        that: molecule_checked.stdout == molecule_before.stdout
-        fail_msg: "{{ molecule_checked.stdout }}"
+        that:
+          - molecule_checked.stdout == molecule_before.stdout
+          - molecule_run.stdout | regex_findall('changed=1 ') | length == 1
+          - molecule_run.stdout is search('replace primitive molecule-one:')
+          - molecule_run.stdout is not search('replace primitive molecule-(two|bare)')
+        fail_msg: "{{ molecule_checked.stdout }} {{ molecule_run.stdout_lines[-30:] }}"
       run_once: true
 
     - name: The parameter changed
@@ -134,6 +153,41 @@
       vars:
         molecule_primitives: "{{ molecule_primitives_changed }}"
         molecule_locations: "{{ molecule_locations_moved }}"
+
+    - name: The CIB before the removal in check mode  # noqa: command-instead-of-shell
+      ansible.builtin.shell: "{{ molecule_cib }}"
+      register: molecule_before_rm
+      changed_when: false
+      run_once: true
+
+    - name: Two primitives removed together, in check mode
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: two absent, check mode
+        molecule_args:
+          - --check
+          - -e
+          - >-
+            {{ {'pacemaker_primitives': [molecule_primitives_changed[0], molecule_primitives_changed[1] | combine({'state': 'absent'}),
+                molecule_primitives_changed[2] | combine({'state': 'absent'})],
+                'pacemaker_location_constraints': [molecule_locations_moved[0]]} | to_json }}
+        molecule_expect: ok
+
+    - name: The CIB after the removal in check mode  # noqa: command-instead-of-shell
+      ansible.builtin.shell: "{{ molecule_cib }}"
+      register: molecule_after_rm
+      changed_when: false
+      run_once: true
+
+    - name: Both removals reported, nothing removed
+      ansible.builtin.assert:
+        that:
+          - molecule_after_rm.stdout == molecule_before_rm.stdout
+          - molecule_run.stdout | regex_findall('changed=1 ') | length == 1
+          - molecule_run.stdout is search('remove primitive \(stopped first, with its locations\) molecule-two')
+          - molecule_run.stdout is search('remove primitive \(stopped first, with its locations\) molecule-bare')
+        fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
+      run_once: true
 
     - name: Two primitives removed together
       ansible.builtin.include_tasks: ../../shared/recap.yml
