@@ -1,0 +1,21 @@
+---
+- name: Verify
+  hosts: nodes
+  gather_facts: false
+  tasks:
+    - name: Every node online with quorum
+      ansible.builtin.include_tasks: ../../shared/online.yml
+
+    - name: The CIB matches the inputs
+      ansible.builtin.include_tasks: ../../shared/cib.yml
+
+    - name: The primitive stopped
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          x=$(crm_resource --locate --resource molecule-move 2>&1)
+          grep -q 'NOT running' <<<"$x" || { echo "FAIL: $x"; exit 1; }
+      args:
+        executable: /bin/bash
+      changed_when: false
+      run_once: true
