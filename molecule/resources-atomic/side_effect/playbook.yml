@@ -1,0 +1,107 @@
+---
+# A stopped primitive started and moved to the other node in one run (target-role and both locations changed): the
+# writes land in one CIB update, so the primitive never starts on the node it leaves.
+- name: Start and move in one run
+  hosts: nodes
+  gather_facts: false
+  vars:
+    molecule_started: >-
+      {{ [pacemaker_primitives[0] | combine({'meta_attributes': {'target-role': 'Started'}})] }}
+    molecule_moved:
+      - id: molecule-move-a
+        resource: molecule-move
+        node: pacemaker-a
+        score: -INFINITY
+      - id: molecule-move-b
+        resource: molecule-move
+        node: pacemaker-b
+        score: INFINITY
+    molecule_inputs: "{{ {'pacemaker_primitives': molecule_started, 'pacemaker_location_constraints': molecule_moved} | to_json }}"
+  tasks:
+    - name: The CIB before check mode
+      ansible.builtin.command: cibadmin --query --xpath /cib/configuration
+      register: molecule_before
+      changed_when: false
+      run_once: true
+
+    - name: Start and move, in check mode
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: check mode
+        molecule_args:
+          - --check
+          - -e
+          - "{{ molecule_inputs }}"
+        molecule_expect: ok
+
+    - name: The CIB after check mode
+      ansible.builtin.command: cibadmin --query --xpath /cib/configuration
+      register: molecule_checked
+      changed_when: false
+      run_once: true
+
+    - name: Check mode wrote nothing, reported the three pending replaces
+      ansible.builtin.assert:
+        that:
+          - molecule_checked.stdout == molecule_before.stdout
+          - molecule_run.stdout | regex_findall('changed=1 ') | length == 1
+          - molecule_run.stdout is search('replace primitive molecule-move:')
+          - molecule_run.stdout is search('replace rsc_location molecule-move-a:')
+          - molecule_run.stdout is search('replace rsc_location molecule-move-b:')
+        fail_msg: "{{ molecule_run.stdout_lines[-30:] }}"
+      run_once: true
+
+    - name: Start and move
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: start and move
+        molecule_args:
+          - -e
+          - "{{ molecule_inputs }}"
+        molecule_expect: ok
+
+    - name: One CIB update, from one node
+      ansible.builtin.assert:
+        that:
+          - molecule_run.stdout | regex_findall('changed=1 ') | length == 1
+          - molecule_run.stdout is search('replace primitive molecule-move')
+        fail_msg: "{{ molecule_run.stdout_lines[-30:] }}"
+      run_once: true
+
+    - name: The new inputs in the CIB
+      ansible.builtin.include_tasks: ../../shared/cib.yml
+      vars:
+        molecule_primitives: "{{ molecule_started }}"
+        molecule_locations: "{{ molecule_moved }}"
+
+    # The operation history keeps a start, or the stop after it, on a node that ran the primitive; a probe only
+    # (monitor, interval 0) on one that never did
+    - name: Started on the second node, never on the first
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          where() { crm_mon -1 | sed -n "s/^ *\* molecule-move[[:space:]].*Started \(pacemaker-[a-z]\).*/\1/p"; }
+          for i in $(seq 30); do [ "$(where)" = pacemaker-b ] && break; sleep 2; done
+          [ "$(where)" = pacemaker-b ] || { echo "FAIL: not on b: $(crm_mon -1)"; exit 1; }
+          ops=$(cibadmin --query --xpath "//node_state[@uname='pacemaker-a']//lrm_resource[@id='molecule-move']" 2>/dev/null || true)
+          if grep -Eq 'operation="(start|stop)"' <<<"$ops"; then echo "FAIL: ran on a: $ops"; exit 1; fi
+          echo "a: $ops"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      run_once: true
+
+    - name: The same inputs again
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: rerun
+        molecule_args:
+          - -e
+          - "{{ molecule_inputs }}"
+        molecule_expect: ok
+
+    - name: The rerun changes nothing
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-30:] }}"
+      run_once: true
