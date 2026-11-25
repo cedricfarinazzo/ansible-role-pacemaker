@@ -17,3 +17,6 @@ pacemaker_cib_sets:
 __pacemaker_unset_rc:
   - 6
   - 105
+# cibadmin --patch on a CIB changed since the copy: CRM_EX_OLD, "Update was older than existing configuration"
+__pacemaker_cib_stale_rc:
+  - 103

@@ -17,6 +17,10 @@
         node: pacemaker-b
         score: INFINITY
     molecule_inputs: "{{ {'pacemaker_primitives': molecule_started, 'pacemaker_location_constraints': molecule_moved} | to_json }}"
+    # A status-only update between the copy and the patch, on the first attempt: the patch is refused as stale
+    molecule_race:
+      __pacemaker_cib_patch_hook: >-
+        cibadmin --modify --scope status --xml-text "<node_state id='$(crm_node -i)' crm-debug-origin='molecule-race'/>"
   tasks:
     - name: The CIB before check mode
       ansible.builtin.command: cibadmin --query --xpath /cib/configuration
@@ -51,20 +55,23 @@
         fail_msg: "{{ molecule_run.stdout_lines[-30:] }}"
       run_once: true
 
-    - name: Start and move
+    - name: Start and move, the CIB changed between copy and patch
       ansible.builtin.include_tasks: ../../shared/recap.yml
       vars:
         molecule_label: start and move
         molecule_args:
           - -e
           - "{{ molecule_inputs }}"
+          - -e
+          - "{{ molecule_race | to_json }}"
         molecule_expect: ok
 
-    - name: One CIB update, from one node
+    - name: One CIB update, from one node, on the second attempt
       ansible.builtin.assert:
         that:
           - molecule_run.stdout | regex_findall('changed=1 ') | length == 1
           - molecule_run.stdout is search('replace primitive molecule-move')
+          - molecule_run.stdout is search('written on attempt 2')
         fail_msg: "{{ molecule_run.stdout_lines[-30:] }}"
       run_once: true
 

@@ -99,81 +99,40 @@
   when: ansible_check_mode
 
 # One CIB update for the whole run: written one by one, the scheduler acts on each intermediate CIB (a new
-# target-role with the old locations starts the resource on its old node). Built on a copy (CIB_file), applied
-# as one versioned patch: a CIB changed meanwhile refuses it.
+# target-role with the old locations starts the resource on its old node). files/cib_patch.py edits a copy
+# (CIB_file), one versioned cibadmin --patch; a CIB changed meanwhile (103) reruns it all from a fresh copy.
 - name: Write the elements in one CIB update
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_facts.discovered_interpreter_python | default('/usr/bin/python3') }}"
+      - -c
+      - "{{ lookup('ansible.builtin.file', 'cib_patch.py') }}"
+      - "{{ {'changes': __pacemaker_element_changes, 'retries': pacemaker_cib_patch_retries | int,
+            'delay': 2, 'stale_rc': __pacemaker_cib_stale_rc, 'hook': __pacemaker_cib_patch_hook | default('')}
+            | to_json }}"
+  register: __pacemaker_cib_write
+  changed_when: __pacemaker_cib_write.rc == 0
+  failed_when: false
+  run_once: true
   when:
     - __pacemaker_element_changes | length > 0
     - not ansible_check_mode
+
+- name: The CIB update is applied
+  ansible.builtin.fail:
+    msg: >-
+      {{ ('the CIB changed during the run ' ~ (pacemaker_cib_patch_retries | int + 1) ~ ' times; rerun')
+         if __pacemaker_cib_write.rc == 3 else __pacemaker_cib_write.stderr }}
   run_once: true
-  block:
-    - name: Work directory for the CIB copy
-      ansible.builtin.tempfile:
-        state: directory
-        suffix: .cib
-      register: __pacemaker_cib_dir
-      changed_when: false
+  when: __pacemaker_cib_write.rc | default(0) != 0
 
-    - name: Copy the live CIB
-      ansible.builtin.shell:
-        cmd: >-
-          set -o pipefail; cibadmin --query > {{ __pacemaker_cib_dir.path }}/original.xml
-          && cp {{ __pacemaker_cib_dir.path }}/original.xml {{ __pacemaker_cib_dir.path }}/new.xml
-        executable: /bin/bash
-      changed_when: false
-
-    - name: Create the missing elements, replace the ones that differ, in the copy
-      ansible.builtin.command:
-        argv: >-
-          {{ ['cibadmin', '--create', '--scope', item.scope, '--xml-text', item.xml] if item.action == 'create'
-             else ['cibadmin', '--replace', '--xpath', item.xpath, '--xml-text', item.xml] }}
-      environment:
-        CIB_file: "{{ __pacemaker_cib_dir.path }}/new.xml"
-      loop: "{{ __pacemaker_element_changes }}"
-      loop_control:
-        label: "{{ item.action }} {{ item.kind }} {{ item.id }}"
-      changed_when: false
-
-    # crm_diff exits 1 when the files differ
-    - name: The patch from the live CIB to the copy
-      ansible.builtin.command:
-        argv:
-          - crm_diff
-          - --original
-          - "{{ __pacemaker_cib_dir.path }}/original.xml"
-          - --new
-          - "{{ __pacemaker_cib_dir.path }}/new.xml"
-      register: __pacemaker_cib_patch
-      changed_when: false
-      failed_when: __pacemaker_cib_patch.rc != 1 or __pacemaker_cib_patch.stdout | length == 0
-
-    - name: Write the patch
-      ansible.builtin.copy:
-        content: "{{ __pacemaker_cib_patch.stdout }}"
-        dest: "{{ __pacemaker_cib_dir.path }}/patch.xml"
-        mode: "0600"
-      changed_when: false
-
-    - name: Apply every change in one CIB update
-      ansible.builtin.command:
-        argv:
-          - cibadmin
-          - --patch
-          - --xml-file
-          - "{{ __pacemaker_cib_dir.path }}/patch.xml"
-      changed_when: true
-
-    - name: Elements written
-      ansible.builtin.debug:
-        msg: "{{ __pacemaker_element_changes | map(attribute='action') | zip(__pacemaker_element_changes
-          | map(attribute='kind'), __pacemaker_element_changes | map(attribute='id')) | map('join', ' ') | list }}"
-  always:
-    - name: Remove the CIB copy
-      ansible.builtin.file:
-        path: "{{ __pacemaker_cib_dir.path }}"
-        state: absent
-      changed_when: false
-      when: __pacemaker_cib_dir.path is defined
+- name: Elements written
+  ansible.builtin.debug:
+    msg: "{{ __pacemaker_element_changes | map(attribute='action') | zip(__pacemaker_element_changes
+      | map(attribute='kind'), __pacemaker_element_changes | map(attribute='id')) | map('join', ' ') | list
+      + [__pacemaker_cib_write.stdout] }}"
+  run_once: true
+  when: __pacemaker_cib_write.rc | default(1) == 0
 
 - name: Read the written elements back
   ansible.builtin.command:

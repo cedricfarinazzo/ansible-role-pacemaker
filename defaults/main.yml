@@ -39,6 +39,9 @@ pacemaker_op_defaults: {}
 pacemaker_primitives: []
 # Location constraints: {id, resource, node, score (INFINITY, -INFINITY or an integer), state: present|absent}
 pacemaker_location_constraints: []
+# Reruns of the whole copy, edit, diff and patch when the patch is refused because the CIB changed meanwhile
+# (e.g. a status update), 0-99
+pacemaker_cib_patch_retries: 3
 
 # A node whose stack failed to start (sbd timed out at boot with no corosync yet, e.g. the network still down)
 # retries it on a timer: only a failed sbd, corosync or pacemaker counts, never a clean stop
