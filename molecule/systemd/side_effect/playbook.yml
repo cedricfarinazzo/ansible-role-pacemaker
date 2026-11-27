@@ -1,0 +1,267 @@
+---
+# Lists changed (drop-ins replaced and removed, pacemaker never restarted), check mode, a real pacemaker start through
+# the DRBD wait on a stub drbdsetup, everything off, then absent: only the role's own files ever go.
+- name: Ordering changed, dropped and removed
+  hosts: nodes
+  gather_facts: false
+  vars:
+    dropins: /etc/systemd/system/pacemaker.service.d
+    user_dropins:
+      - override.conf
+      - after-molecule-monitor.service.conf
+      - ansible-local.conf
+  tasks:
+    - name: Pacemaker's main process before the reruns  # noqa: command-instead-of-module
+      ansible.builtin.command: systemctl show pacemaker.service -p MainPID --value
+      register: pid_before
+      changed_when: false
+
+    - name: The socket dropped, the wanted unit now required, a longer wait without its unit or directory
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: lists changed
+        molecule_args:
+          - -e
+          - >-
+            {"pacemaker_systemd_after": ["molecule-monitor.service"], "pacemaker_systemd_wants": [],
+            "pacemaker_systemd_requires": ["molecule-need.service", "molecule-want.service"],
+            "pacemaker_drbd_wait_timeout": 7, "pacemaker_drbd_wait_after": [], "pacemaker_drbd_wait_resource_dir": "",
+            "pacemaker_drbd_wait_resources": ["r1"]}
+        molecule_expect: ok
+
+    - name: Changed on every node
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=[1-9]') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true
+
+    - name: List the drop-ins
+      ansible.builtin.find:
+        paths: "{{ dropins }}"
+        patterns: "*"
+      register: listing
+
+    - name: Read the new drop-ins
+      ansible.builtin.slurp:
+        src: "{{ dropins }}/{{ item }}"
+      loop:
+        - ansible-requires-molecule-want.service.conf
+        - ansible-drbd-wait.conf
+      register: conf
+
+    - name: Read pacemaker.service as systemd has it  # noqa: command-instead-of-module
+      ansible.builtin.command: systemctl show pacemaker.service -p MainPID -p Wants -p Requires -p After -p TimeoutStartUSec
+      register: unit
+      changed_when: false
+
+    - name: Replaced and removed drop-ins, the host's own kept, systemd reloaded, pacemaker never restarted
+      ansible.builtin.assert:
+        that:
+          - listing.files | map(attribute='path') | map('basename') | sort == (user_dropins + want) | sort
+          - conf.results[0].content | b64decode == "[Unit]\nAfter=molecule-want.service\nRequires=molecule-want.service\n"
+          - conf.results[1].content | b64decode == wait
+          - unit.stdout is search('(?m)^TimeoutStartUSec=1min 7s$')
+          - "'molecule-want.service' in u.Requires"
+          - "'molecule-monitor.socket' not in u.After"
+          - "'molecule-drbd.service' not in u.After"
+          - unit.stdout is search('(?m)^MainPID=' ~ pid_before.stdout ~ '$')
+        fail_msg: "{{ listing.files | map(attribute='path') | map('basename') | sort }} {{ unit.stdout_lines }}"
+      vars:
+        u: >-
+          {{ dict(unit.stdout_lines | map('regex_replace', '=.*', '')
+             | zip(unit.stdout_lines | map('regex_replace', '^[^=]*=', '') | map('split'))) }}
+        want:
+          - ansible-after-molecule-monitor.service.conf
+          - ansible-requires-molecule-need.service.conf
+          - ansible-requires-molecule-want.service.conf
+          - ansible-drbd-wait.conf
+        wait: "[Service]\nTimeoutStartSec=67\nExecStartPre=/usr/local/sbin/pacemaker-drbd-wait 7 r1\n"
+
+    - name: Check mode with a new unit and no wait
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: check mode
+        molecule_args:
+          - --check
+          - -e
+          - >-
+            {"pacemaker_systemd_after": ["molecule-monitor.service", "molecule-new.target"], "pacemaker_systemd_wants": [],
+            "pacemaker_systemd_requires": ["molecule-need.service", "molecule-want.service"],
+            "pacemaker_drbd_wait_timeout": 7, "pacemaker_drbd_wait_after": [], "pacemaker_drbd_wait_resource_dir": "",
+            "pacemaker_drbd_wait_resources": []}
+        molecule_expect: ok
+
+    - name: Look for what check mode would change
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ dropins }}/ansible-after-molecule-new.target.conf"
+        - "{{ dropins }}/ansible-drbd-wait.conf"
+        - /usr/local/sbin/pacemaker-drbd-wait
+      register: checked
+
+    - name: Check mode reports the change and writes nothing
+      ansible.builtin.assert:
+        that:
+          - molecule_run.stdout | regex_findall('changed=[1-9]') | length == groups['nodes'] | length
+          - checked.results | map(attribute='stat.exists') | list == [false, true, true]
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+
+# Pacemaker restarted here by the test, not the role: its start runs the wait, and pulls in the required units
+- name: A real start through the wait
+  hosts: nodes
+  gather_facts: false
+  tasks:
+    - name: Back to the scenario's inputs
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: scenario inputs
+        molecule_args: []
+        molecule_expect: ok
+
+    # r0 and r1 configured here (a .res file), r2 not; r0's local disk UpToDate, r1's only on its peer
+    - name: A stub drbdsetup and the resource files
+      ansible.builtin.shell:
+        cmd: |
+          mkdir -p /etc/molecule-drbd && touch /etc/molecule-drbd/r0.res /etc/molecule-drbd/r1.res
+          cat >/usr/local/bin/drbdsetup <<'EOF'
+          #!/bin/sh
+          echo "$2" >>/run/molecule-drbdsetup.calls
+          case $2 in
+            r0) printf '%s role:Secondary\n  disk:UpToDate\n' "$2" ;;
+            *) printf '%s role:Secondary\n  disk:Inconsistent\n  peer role:Primary\n    peer-disk:UpToDate\n' "$2" ;;
+          esac
+          EOF
+          chmod 0755 /usr/local/bin/drbdsetup
+          rm -f /run/molecule-drbdsetup.calls
+      changed_when: false
+
+    - name: Pacemaker restarted, one node at a time
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          # Never started: a drop-in added to a running pacemaker starts nothing
+          echo "before=$(systemctl is-active molecule-need.service molecule-want.service | tr '\n' ' ')"
+          since=$(date '+%Y-%m-%d %H:%M:%S')
+          s=$(date +%s)
+          systemctl restart pacemaker.service
+          echo "took=$(($(date +%s) - s))"
+          echo "need=$(systemctl is-active molecule-need.service) want=$(systemctl is-active molecule-want.service)"
+          echo "polled=$(sort -u /run/molecule-drbdsetup.calls | tr '\n' ' ')"
+          journalctl -u pacemaker.service --since "$since" -o cat | grep pacemaker-drbd-wait: || true
+        executable: /bin/bash
+      register: restart
+      changed_when: false
+      throttle: 1
+
+    - name: The wait held the start until the deadline, logged the late resource only, then pacemaker started
+      ansible.builtin.assert:
+        that:
+          - restart.stdout_lines[0] == 'before=inactive inactive '
+          - restart.stdout_lines[1] | regex_replace('^took=', '') | int >= 4
+          - restart.stdout_lines[2] == 'need=active want=active'
+          - restart.stdout_lines[3] == 'polled=r0 r1 '
+          - restart.stdout_lines[4:] == [late]
+        fail_msg: "{{ restart.stdout_lines }}"
+      vars:
+        late: "pacemaker-drbd-wait: r1: local disk not UpToDate after 4 s, starting pacemaker anyway"
+
+    - name: Every node online with quorum
+      ansible.builtin.include_tasks: ../../shared/online.yml
+
+    - name: Pacemaker's main process after the start  # noqa: command-instead-of-module
+      ansible.builtin.command: systemctl show pacemaker.service -p MainPID --value
+      register: pid_before
+      changed_when: false
+
+    - name: Everything off
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: everything off
+        molecule_args:
+          - -e
+          - >-
+            {"pacemaker_systemd_after": [], "pacemaker_systemd_wants": [], "pacemaker_systemd_requires": [],
+            "pacemaker_drbd_wait_resources": []}
+        molecule_expect: ok
+
+    - name: Rerun with no change
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: off, no change
+        molecule_args:
+          - -e
+          - >-
+            {"pacemaker_systemd_after": [], "pacemaker_systemd_wants": [], "pacemaker_systemd_requires": [],
+            "pacemaker_drbd_wait_resources": []}
+        molecule_expect: ok
+
+    - name: Nothing changed
+      ansible.builtin.assert:
+        that: molecule_run.stdout | regex_findall('changed=0 ') | length == groups['nodes'] | length
+        fail_msg: "{{ molecule_run.stdout_lines[-6:] }}"
+      run_once: true
+
+    - name: List the drop-ins and the script
+      ansible.builtin.find:
+        paths:
+          - /etc/systemd/system/pacemaker.service.d
+          - /usr/local/sbin
+        patterns: "*"
+      register: listing
+
+    - name: Read pacemaker.service as systemd has it  # noqa: command-instead-of-module
+      ansible.builtin.command: systemctl show pacemaker.service -p MainPID -p ExecStartPre -p TimeoutStartUSec -p Requires
+      register: unit
+      changed_when: false
+
+    - name: Only the host's drop-ins left, the script gone, systemd reloaded, pacemaker never restarted
+      ansible.builtin.assert:
+        that:
+          - listing.files | map(attribute='path') | map('basename') | sort == want
+          - unit.stdout is not search('pacemaker-drbd-wait|molecule-need')
+          - unit.stdout is search('(?m)^MainPID=' ~ pid_before.stdout ~ '$')
+        fail_msg: "{{ listing.files | map(attribute='path') | list }} {{ unit.stdout_lines }}"
+      vars:
+        want:
+          - after-molecule-monitor.service.conf
+          - ansible-local.conf
+          - override.conf
+
+- name: Removal
+  hosts: nodes
+  gather_facts: false
+  tasks:
+    - name: Back to the scenario's inputs
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: scenario inputs again
+        molecule_args: []
+        molecule_expect: ok
+
+    - name: Absent
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: absent
+        molecule_args:
+          - -e
+          - '{"pacemaker_state": "absent"}'
+        molecule_expect: ok
+
+    - name: List the drop-ins and the script
+      ansible.builtin.find:
+        paths:
+          - /etc/systemd/system/pacemaker.service.d
+          - /usr/local/sbin
+        patterns: "*"
+      register: listing
+
+    - name: Absent removes the role's drop-ins and script, never the host's
+      ansible.builtin.assert:
+        that: listing.files | map(attribute='path') | map('basename') | sort == want
+        fail_msg: "{{ listing.files | map(attribute='path') | list }}"
+      vars:
+        want:
+          - after-molecule-monitor.service.conf
+          - ansible-local.conf
+          - override.conf

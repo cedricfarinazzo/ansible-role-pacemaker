@@ -1,0 +1,85 @@
+---
+# Pacemaker's ordering drop-ins and its DRBD wait. Every file the role writes carries __pacemaker_dropin_prefix, and
+# only those are ever removed: a drop-in written by anyone else is left alone. A change reloads systemd only: a
+# restart would stop every resource on the node; the next pacemaker start applies it.
+- name: Pacemaker drop-in directory
+  ansible.builtin.file:
+    path: "{{ __pacemaker_dropin_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: __pacemaker_ordering | length > 0 or pacemaker_drbd_wait_resources | length > 0
+
+# Named by the full unit name: a.service and a.socket get one file each
+- name: Ordering drop-ins
+  ansible.builtin.copy:
+    dest: "{{ __pacemaker_dropin_dir }}/{{ __pacemaker_dropin_prefix }}{{ item.0 }}-{{ item.1 }}.conf"
+    content: |
+      [Unit]
+      After={{ item.1 }}
+      {% if item.0 != 'after' %}
+      {{ item.0 | capitalize }}={{ item.1 }}
+      {% endif %}
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ __pacemaker_ordering }}"
+  loop_control:
+    label: "{{ item.0 }} {{ item.1 }}"
+  register: __pacemaker_ordering_written
+
+- name: DRBD wait script
+  ansible.builtin.copy:
+    src: pacemaker-drbd-wait
+    dest: "{{ __pacemaker_drbd_wait_script }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: pacemaker_drbd_wait_resources | length > 0
+
+# TimeoutStartSec covers the whole wait and pacemaker's own start after it
+- name: DRBD wait drop-in
+  ansible.builtin.copy:
+    dest: "{{ __pacemaker_dropin_dir }}/{{ __pacemaker_dropin_prefix }}drbd-wait.conf"
+    content: |
+      {% if pacemaker_drbd_wait_after | length > 0 %}
+      [Unit]
+      After={{ pacemaker_drbd_wait_after | join(' ') }}
+      {% endif %}
+      [Service]
+      TimeoutStartSec={{ pacemaker_drbd_wait_timeout | int + __pacemaker_drbd_wait_start_margin }}
+      ExecStartPre={{ __pacemaker_drbd_wait_script }}{{ (' -d ' ~ pacemaker_drbd_wait_resource_dir) if pacemaker_drbd_wait_resource_dir else '' }} {{ pacemaker_drbd_wait_timeout | int }} {{ pacemaker_drbd_wait_resources | join(' ') }}
+    owner: root
+    group: root
+    mode: "0644"
+  register: __pacemaker_drbd_wait_written
+  when: pacemaker_drbd_wait_resources | length > 0
+
+- name: Find the role's drop-ins
+  ansible.builtin.find:
+    paths: "{{ __pacemaker_dropin_dir }}"
+    patterns: "{{ __pacemaker_dropin_patterns }}"
+  register: __pacemaker_dropins_found
+
+- name: Drop-ins of units no longer listed removed
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: >-
+    {{ __pacemaker_dropins_found.files | map(attribute='path') | reject('in', __pacemaker_dropins_wanted
+       | map('regex_replace', '^', __pacemaker_dropin_dir ~ '/') | list) | sort }}
+  register: __pacemaker_dropins_removed
+
+- name: DRBD wait script removed
+  ansible.builtin.file:
+    path: "{{ __pacemaker_drbd_wait_script }}"
+    state: absent
+  when: pacemaker_drbd_wait_resources | length == 0
+
+- name: Systemd reads pacemaker's drop-ins  # noqa: no-handler
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: >-
+    __pacemaker_ordering_written is changed or __pacemaker_drbd_wait_written is changed
+    or __pacemaker_dropins_removed is changed

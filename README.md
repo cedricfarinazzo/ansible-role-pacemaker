@@ -107,6 +107,13 @@ pacemaker_upgrade_patterns: [corosync, libcorosync, ..., pacemaker, libpe-, ...,
 pacemaker_upgrade_nodes: []                  # nodes that must be Online and out of standby; [] reads every member from the cluster
 pacemaker_upgrade_timeout: 300               # seconds per wait: resources off the node, stack up, node Online, 1-99999
 pacemaker_upgrade_poll_delay: 5              # seconds between polls, 1-999
+pacemaker_systemd_after: []                  # units pacemaker starts after and stops before
+pacemaker_systemd_wants: []                  # units pacemaker pulls in (Wants=) and starts after
+pacemaker_systemd_requires: []               # units pacemaker needs (Requires=) and starts after
+pacemaker_drbd_wait_resources: []            # DRBD resources whose local disk pacemaker waits for at start; [] no wait
+pacemaker_drbd_wait_timeout: 90              # seconds, one deadline over every resource, 1-99999
+pacemaker_drbd_wait_after: []                # units the wait starts after, e.g. the service that brings DRBD up
+pacemaker_drbd_wait_resource_dir: ""         # wait only for resources with a <name>.res file here, e.g. /etc/drbd.d
 ```
 
 Names are `[A-Za-z][A-Za-z0-9_-]*`; values printable, 1-255 characters; booleans are written `true`/`false`.
@@ -155,9 +162,32 @@ The role never writes an SBD header (it erases the device). Initialise each devi
 
 `sbd` starts with corosync, and its cluster servant waits for a running local corosync. When corosync waits for `network-online.target` at boot (the network is down, e.g. a node reset by its watchdog while isolated), sbd hits its start timeout first: corosync and pacemaker fail as a dependency, and systemd never retries that, even once the network is back. With `pacemaker_rejoin: true` the role installs `pacemaker-rejoin.timer`. Every `pacemaker_rejoin_interval` seconds, if `sbd`, `corosync` or `pacemaker` is **failed**, it runs `systemctl start --no-block` on `pacemaker_rejoin_units`. Fencing is unchanged: the stack starts through its normal unit chain, sbd and its watchdog first, and the node joins only by corosync membership and quorum. A clean `systemctl stop` leaves the units inactive, not failed, so the timer never undoes it. A start that fails for another reason (e.g. a stack restart by this role that failed) is retried the same way; a stack that fails again, e.g. from a bad config, is retried every interval forever, and `systemctl stop pacemaker-rejoin.timer` pauses it. `pacemaker_rejoin_log_level_max: notice` sets `LogLevelMax=notice` on the service: systemd's own info lines about it (Starting, Finished, skipped by its condition) are dropped too, so a healthy node logs nothing every interval; warnings and errors still reach the journal. The interval is at least 5 s: below it the oneshot service would hit systemd's start limit (5 starts in 10 s). Off by default; `false` removes the timer.
 
+### Systemd ordering of pacemaker.service
+
+Pacemaker stops every resource of a node when it stops, so its place in the boot and shutdown order decides what those resources still have around them. The role writes one drop-in per unit in `/etc/systemd/system/pacemaker.service.d/`:
+
+| Variable | Drop-in | Content | When the unit fails or is missing |
+|----------|---------|---------|-----------------------------------|
+| `pacemaker_systemd_after` | `ansible-after-<unit>.conf` | `After=` | pacemaker starts anyway; the unit is not started for it |
+| `pacemaker_systemd_wants` | `ansible-wants-<unit>.conf` | `After=` and `Wants=` | pacemaker starts anyway; starting pacemaker starts the unit |
+| `pacemaker_systemd_requires` | `ansible-requires-<unit>.conf` | `After=` and `Requires=` | pacemaker does not start, and stops when the unit stops |
+
+`After=` also reverses at shutdown: pacemaker stops, and so stops its resources, **before** the units it starts after. Each file is named by the full unit name, so `ups-monitor.service` and `ups-monitor.socket` get one each. A unit with `Wants=` that never finishes starting (e.g. a `systemd-cryptsetup@` unit waiting for a passphrase) still holds pacemaker back, by the `After=`. Unit names are checked (one token, a known unit type, no newline); a unit sits in one of the three lists only, and `pacemaker.service` in none.
+
+A unit dropped from a list loses its drop-in. The role only ever writes and removes files named `ansible-after-*.conf`, `ansible-wants-*.conf`, `ansible-requires-*.conf` and `ansible-drbd-wait.conf` there: any other drop-in (an `override.conf` from `systemctl edit`, another tool's) is left alone. A change runs `systemctl daemon-reload` and never restarts pacemaker (that would stop the node's resources): it applies from pacemaker's next start.
+
+### Waiting for DRBD before pacemaker starts
+
+When resources run on DRBD (e.g. a VM or a filesystem on a replicated volume), pacemaker can start at boot before the DRBD resources are attached and in sync, and the resources fail on a missing or outdated disk. With `pacemaker_drbd_wait_resources` set, pacemaker's start first runs `/usr/local/sbin/pacemaker-drbd-wait` (an `ExecStartPre=` in `ansible-drbd-wait.conf`). It polls `drbdsetup status <resource>` every second until the **local** disk of every volume reads `disk:UpToDate`; a peer's `peer-disk:UpToDate` never counts. All resources share **one** deadline of `pacemaker_drbd_wait_timeout` seconds, never one each, and the wait never blocks the boot: a resource still not UpToDate at the deadline is logged to pacemaker's journal (`pacemaker-drbd-wait: <resource>: local disk not UpToDate after <n> s, starting pacemaker anyway`) and pacemaker starts. `TimeoutStartSec=` is set to the deadline plus 60 s, for pacemaker's own start after the wait.
+
+- `pacemaker_drbd_wait_after`: units the wait starts after, e.g. the service that creates or attaches the DRBD resources on your hosts (`drbd.service`, or a storage manager's satellite service). No default: the role does not guess which one you run.
+- `pacemaker_drbd_wait_resource_dir`: with one inventory list for every node, set it to the directory holding one `<resource>.res` file per resource configured on that host (e.g. `/etc/drbd.d`, or a storage manager's generated directory). A resource without its file is skipped on that host, without a poll.
+
+An empty list removes the drop-in and the script.
+
 ### Removal
 
-`pacemaker_state: absent` stops and disables Pacemaker and SBD, purges the packages and removes `/var/lib/pacemaker` and `/etc/default/sbd`. `sbd` stops only with corosync, and a killed `sbd` lets the watchdog reset the node: when `sbd` runs, the role stops corosync on that node first and leaves it stopped. Corosync's configuration and the `pcsd` mask are left to whoever set them up.
+`pacemaker_state: absent` stops and disables Pacemaker and SBD, purges the packages and removes `/var/lib/pacemaker` and `/etc/default/sbd`, and the role's own `pacemaker.service` drop-ins and DRBD wait script (other drop-ins stay). `sbd` stops only with corosync, and a killed `sbd` lets the watchdog reset the node: when `sbd` runs, the role stops corosync on that node first and leaves it stopped. Corosync's configuration and the `pcsd` mask are left to whoever set them up.
 
 ### Stopping a node for maintenance
 
@@ -282,6 +312,33 @@ Initialise the device once first (see [SBD with devices](#sbd-with-devices)).
           SBD_STARTMODE: clean
 ```
 
+### Ordering after a UPS monitor, an encrypted volume and DRBD
+
+```yaml
+- hosts: cluster
+  become: true
+  roles:
+    - role: cedricfarinazzo.pacemaker
+      vars:
+        # At shutdown on battery, pacemaker stops the resources before the UPS monitor goes
+        pacemaker_systemd_after:
+          - nut-monitor.service
+        # The data volume is unlocked before pacemaker starts; a failed unlock still lets it start
+        pacemaker_systemd_wants:
+          - systemd-cryptsetup@data.service
+        # The resources' filesystem: no pacemaker without it
+        pacemaker_systemd_requires:
+          - srv-data.mount
+        # Each node waits up to 120 s in all for the resources configured on it
+        pacemaker_drbd_wait_resources:
+          - vm-web
+          - vm-db
+        pacemaker_drbd_wait_timeout: 120
+        pacemaker_drbd_wait_after:
+          - drbd.service
+        pacemaker_drbd_wait_resource_dir: /etc/drbd.d
+```
+
 ## 🧪 Testing
 
 ```bash
@@ -289,6 +346,7 @@ Initialise the device once first (see [SBD with devices](#sbd-with-devices)).
 ./run-tests.sh all                 # every distribution, in parallel
 ./run-tests.sh -s failure debian13 # the failure paths
 tests/validate.test.sh             # the input checks: every rule, trailing and embedded newlines
+tests/drbd-wait.test.sh            # the DRBD wait script on a stub drbdsetup
 ```
 
 | Scenario | What it proves |
@@ -302,6 +360,7 @@ tests/validate.test.sh             # the input checks: every rule, trailing and 
 | `resources-multi` | Three nodes, three primitives (one with no attribute or operation) and INFINITY, -INFINITY and integer scores: each where its locations put it, the CIB matches the inputs, idempotence; check mode on the converged CIB reports nothing; a parameter change in check mode reports one replace and writes nothing; the same change writes one primitive and Pacemaker restarts it; a location moved (the primitive follows) and one set absent alone; a meta attribute edited by hand undone; two primitives removed together with their locations (reported first in check mode, nothing removed), the third kept; the removal again changes nothing |
 | `resources-atomic` | Two nodes, a stopped primitive pinned to the first: started and moved to the second in one run (target-role and both locations changed); check mode reports the three replaces and writes nothing; one CIB update; a status update forced between the copy and the patch, the update retried from a fresh copy and written once; the primitive Started on the second node with no start or stop in the first node's operation history; a rerun changes nothing |
 | `upgrade` | Three nodes, each with a local apt repository holding newer versions of two stand-in packages (one matching the pattern, one holding it but not at its start), a Dummy primitive preferring the first node: check mode names each node's package and changes nothing; a peer in standby, a peer offline and a listed node absent from the cluster each refused before any change, with the reason; one node upgraded alone: the primitive runs elsewhere meanwhile and comes back, the package upgraded with corosync and pacemaker inactive (its postinst records them), the other package untouched; the whole cluster: the node already upgraded gets no standby; a rerun changes nothing; a resource stop slower than the timeout fails with its message, the node left in standby with its stack running and nothing upgraded |
+| `systemd` | Two nodes: a drop-in per unit (`.service` and `.socket` of one name apart) byte for byte, as `systemctl show` reads them; a stale role drop-in removed, the host's own drop-ins (`override.conf`, names outside the role's prefixes) kept; lists changed: drop-ins replaced and removed, systemd reloaded, pacemaker's main process unchanged; check mode reports and writes nothing; a real pacemaker start pulls in the wanted and required units and runs the wait on a stub `drbdsetup`: the resource without a `.res` file never polled, the UpToDate one silent, the one UpToDate only on its peer logged at the deadline and pacemaker started; everything off removes the role's drop-ins and script, then a rerun changes nothing; absent removes them too |
 | `failure` | A control character, a rejoin log level with a trailing newline, a missing watchdog, a watchdog held by another process (named), an SBD device without a header, corosync stopped on one node: each fails with its message, no property and no SBD file changed |
 
 A container has no watchdog: `sbd` runs on a stand-in character device that never resets the node, and the other scenarios run SBD config-only (`pacemaker_sbd_service: false`). The reset itself is only proven on hosts.

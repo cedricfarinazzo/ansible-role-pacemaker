@@ -12,6 +12,14 @@
   vars:
     pacemaker_rejoin: false
 
+- name: The role's pacemaker drop-ins and DRBD wait removed
+  ansible.builtin.include_tasks: systemd.yml
+  vars:
+    pacemaker_systemd_after: []
+    pacemaker_systemd_wants: []
+    pacemaker_systemd_requires: []
+    pacemaker_drbd_wait_resources: []
+
 - name: Pacemaker stopped and disabled
   ansible.builtin.systemd_service:
     name: pacemaker.service
