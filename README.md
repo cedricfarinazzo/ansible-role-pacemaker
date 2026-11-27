@@ -102,6 +102,11 @@ pacemaker_rejoin_units:                      # .service or .target names started
   - pacemaker.service                        # add corosync-qdevice.service with a quorum device
 pacemaker_rejoin_log_level_max: ""           # LogLevelMax= of the rejoin service, e.g. notice; empty logs all
 
+# Rolling upgrade only (tasks_from: upgrade.yml), see "Rolling upgrade of the cluster packages"
+pacemaker_upgrade_patterns: [corosync, libcorosync, ..., pacemaker, libpe-, ..., sbd, pcs, resource-agents, fence-agents]
+pacemaker_upgrade_nodes: []                  # nodes that must be Online and out of standby; [] reads every member from the cluster
+pacemaker_upgrade_timeout: 300               # seconds per wait: resources off the node, stack up, node Online, 1-99999
+pacemaker_upgrade_poll_delay: 5              # seconds between polls, 1-999
 pacemaker_systemd_after: []                  # units pacemaker starts after and stops before
 pacemaker_systemd_wants: []                  # units pacemaker pulls in (Wants=) and starts after
 pacemaker_systemd_requires: []               # units pacemaker needs (Requires=) and starts after
@@ -201,6 +206,38 @@ systemctl start corosync pacemaker  # sbd starts with corosync
 systemctl start corosync-qdevice    # only on a node that uses a quorum device (it stopped with corosync)
 crm_attribute --node "$(crm_node -n)" --name standby --delete
 ```
+
+### Rolling upgrade of the cluster packages
+
+`unattended-upgrades` or a plain `apt upgrade` upgrades the cluster packages with the stack running: a maintainer script stops or restarts part of it (`pacemaker` alone, `corosync` under a running `pacemaker`), which can lose resources or, with `sbd`, reset the node. The `upgrade.yml` entry point upgrades them behind the maintenance stop above, one node per run of its tasks. On each node it:
+
+1. refuses, before any change, unless this node is Online and every other node (`pacemaker_upgrade_nodes`, or every member node `crm_mon --output-as=xml` lists) is Online and not in standby: never two nodes out at once;
+2. runs `apt-get update` and lists the upgradable packages whose name a `pacemaker_upgrade_patterns` entry matches from its start; none: nothing else happens (no standby);
+3. in check mode, names those packages (reported as changed) and stops there;
+4. puts the node in standby and waits until no resource runs on it;
+5. stops `pacemaker` and `corosync` in one command (never `pacemaker` alone) and checks none of `corosync`, `corosync-qdevice`, `pacemaker` and `sbd` still active;
+6. runs `apt-get install --only-upgrade -o Dpkg::Options::=--force-confold` on exactly those packages, then checks `dpkg --audit` prints nothing;
+7. starts `pacemaker` (and `corosync-qdevice` when it ran before), waits until every unit that ran before runs again;
+8. deletes the standby attribute and waits until the node is Online.
+
+Each wait is bounded by `pacemaker_upgrade_timeout`. Any failure stops there and leaves the node as it is (in standby, possibly stopped) for the operator; nothing is undone. Run it from a `serial: 1` play with `any_errors_fatal: true`, so a failure on one node stops the run before the next node stops: the peer check only sees the cluster, a parallel run would stop several nodes at once. Debian and Ubuntu (apt) only, with facts gathered; anything else is refused before any change. Only the matched packages are upgraded: run the rest of the host's upgrades as usual, with these patterns held back (e.g. in `Unattended-Upgrade::Package-Blacklist`).
+
+```yaml
+- name: Upgrade the cluster packages, one node at a time
+  hosts: cluster
+  become: true
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Upgrade this node
+      ansible.builtin.include_role:
+        name: cedricfarinazzo.pacemaker
+        tasks_from: upgrade.yml
+      vars:
+        pacemaker_upgrade_timeout: 600
+```
+
+`--check` lists what each node would upgrade and changes nothing. A failed run leaves the node in standby: check `crm_mon -1r`, finish by hand (`dpkg --configure -a`, `systemctl start pacemaker`, `crm_attribute --node "$(crm_node -n)" --name standby --delete`), or fix the cause and rerun.
 
 ## 🎯 Usage Examples
 
@@ -322,6 +359,7 @@ tests/drbd-wait.test.sh            # the DRBD wait script on a stub drbdsetup
 | `resources` | Two nodes, a Dummy primitive with attributes and two operations, pinned to one node with INFINITY: Started there, the CIB matches the inputs, idempotence; an operation timeout changed writes that primitive only and does not restart it; both entries dropped from the input are left in the CIB with nothing changed; an id with a newline and an unknown agent refused before any write, CIB byte-identical; absent stops it, then deletes it and its location; absent twice changes nothing |
 | `resources-multi` | Three nodes, three primitives (one with no attribute or operation) and INFINITY, -INFINITY and integer scores: each where its locations put it, the CIB matches the inputs, idempotence; check mode on the converged CIB reports nothing; a parameter change in check mode reports one replace and writes nothing; the same change writes one primitive and Pacemaker restarts it; a location moved (the primitive follows) and one set absent alone; a meta attribute edited by hand undone; two primitives removed together with their locations (reported first in check mode, nothing removed), the third kept; the removal again changes nothing |
 | `resources-atomic` | Two nodes, a stopped primitive pinned to the first: started and moved to the second in one run (target-role and both locations changed); check mode reports the three replaces and writes nothing; one CIB update; a status update forced between the copy and the patch, the update retried from a fresh copy and written once; the primitive Started on the second node with no start or stop in the first node's operation history; a rerun changes nothing |
+| `upgrade` | Three nodes, each with a local apt repository holding newer versions of two stand-in packages (one matching the pattern, one holding it but not at its start), a Dummy primitive preferring the first node: check mode names each node's package and changes nothing; a peer in standby, a peer offline and a listed node absent from the cluster each refused before any change, with the reason; one node upgraded alone: the primitive runs elsewhere meanwhile and comes back, the package upgraded with corosync and pacemaker inactive (its postinst records them), the other package untouched; the whole cluster: the node already upgraded gets no standby; a rerun changes nothing; a resource stop slower than the timeout fails with its message, the node left in standby with its stack running and nothing upgraded |
 | `systemd` | Two nodes: a drop-in per unit (`.service` and `.socket` of one name apart) byte for byte, as `systemctl show` reads them; a stale role drop-in removed, the host's own drop-ins (`override.conf`, names outside the role's prefixes) kept; lists changed: drop-ins replaced and removed, systemd reloaded, pacemaker's main process unchanged; check mode reports and writes nothing; a real pacemaker start pulls in the wanted and required units and runs the wait on a stub `drbdsetup`: the resource without a `.res` file never polled, the UpToDate one silent, the one UpToDate only on its peer logged at the deadline and pacemaker started; everything off removes the role's drop-ins and script, then a rerun changes nothing; absent removes them too |
 | `failure` | A control character, a rejoin log level with a trailing newline, a missing watchdog, a watchdog held by another process (named), an SBD device without a header, corosync stopped on one node: each fails with its message, no property and no SBD file changed |
 

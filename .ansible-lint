@@ -12,3 +12,4 @@ exclude_paths:
 # Task files the scenarios include, not playbooks
 kinds:
   - tasks: "molecule/shared/{recap,online,cib}.yml"
+  - tasks: "molecule/upgrade/{publish,state}.yml"

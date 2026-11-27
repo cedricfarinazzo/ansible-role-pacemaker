@@ -1,0 +1,90 @@
+---
+# Entry point (tasks_from: upgrade.yml): one node's cluster packages upgraded behind standby and a full stack stop.
+# Meant for a serial: 1, any_errors_fatal play; refuses unless every other node is Online and out of standby.
+- name: Validate the rolling upgrade inputs
+  ansible.builtin.import_tasks: upgrade_validate.yml
+
+- name: The node upgrades with apt
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] | default('') == 'Debian'
+    fail_msg: >-
+      The rolling upgrade supports Debian and Ubuntu (apt) only, with facts gathered; {{ inventory_hostname }} is
+      {{ ansible_facts['os_family'] | default('unknown: gather facts') }}. Nothing changed.
+    quiet: true
+
+- name: Read this node's cluster name
+  ansible.builtin.command:
+    argv:
+      - crm_node
+      - --name
+  register: __pacemaker_upgrade_node
+  changed_when: false
+  check_mode: false
+
+- name: Read the cluster
+  ansible.builtin.command:
+    argv:
+      - crm_mon
+      - --one-shot
+      - --output-as=xml
+  register: __pacemaker_upgrade_mon
+  changed_when: false
+  check_mode: false
+
+# Never two nodes down at once: one already out would leave the cluster a single failure from losing quorum
+- name: Every other node is Online and out of standby
+  ansible.builtin.assert:
+    that:
+      - __pacemaker_upgrade_self | length == 1 and __pacemaker_upgrade_self[0] is search(' online="true"')
+      - __pacemaker_upgrade_peers | length > 0
+      - __pacemaker_upgrade_peers | difference(__pacemaker_upgrade_ready) | length == 0
+    fail_msg: >-
+      {{ __pacemaker_upgrade_node.stdout }} not upgraded:
+      {{ ('no other node to take its resources' if __pacemaker_upgrade_peers | length == 0 else
+          (__pacemaker_upgrade_peers | difference(__pacemaker_upgrade_ready) | join(', ')) ~ ' not Online or in standby')
+         if __pacemaker_upgrade_self | length == 1 and __pacemaker_upgrade_self[0] is search(' online="true"')
+         else 'this node is not Online' }}. Nothing changed.
+    quiet: true
+
+- name: Read the stack units
+  ansible.builtin.command:
+    argv: "{{ ['systemctl', 'is-active'] + __pacemaker_upgrade_units }}"
+  register: __pacemaker_upgrade_before
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refresh the package lists  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    argv:
+      - apt-get
+      - update
+      - -qq
+  changed_when: false
+  check_mode: false
+
+- name: Read the pending upgrades
+  ansible.builtin.command:
+    argv:
+      - apt
+      - list
+      - --upgradable
+  environment:
+    LC_ALL: C
+  register: __pacemaker_upgrade_apt
+  changed_when: false
+  check_mode: false
+
+- name: Report the cluster packages to upgrade
+  ansible.builtin.debug:
+    msg: >-
+      {{ __pacemaker_upgrade_node.stdout }}:
+      {{ ('would upgrade ' if ansible_check_mode else 'upgrades ') ~ __pacemaker_upgrade_pending | join(' ')
+         if __pacemaker_upgrade_pending | length > 0 else 'no cluster package to upgrade' }}
+  changed_when: ansible_check_mode and __pacemaker_upgrade_pending | length > 0
+
+- name: Upgrade this node
+  ansible.builtin.include_tasks: upgrade_node.yml
+  when:
+    - __pacemaker_upgrade_pending | length > 0
+    - not ansible_check_mode

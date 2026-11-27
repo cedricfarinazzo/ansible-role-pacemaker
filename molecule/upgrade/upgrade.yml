@@ -1,0 +1,11 @@
+---
+# The rolling upgrade as a consumer runs it: one node at a time, the first failure stops every node
+- name: Rolling upgrade of the cluster packages
+  hosts: nodes
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Upgrade this node
+      ansible.builtin.include_role:
+        name: ../../../ansible-role-pacemaker
+        tasks_from: upgrade.yml

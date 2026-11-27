@@ -20,6 +20,36 @@ __pacemaker_unset_rc:
 # cibadmin --patch on a CIB changed since the copy: CRM_EX_OLD, "Update was older than existing configuration"
 __pacemaker_cib_stale_rc:
   - 103
+# Rolling upgrade: the stack units, restored to their state before the stop
+__pacemaker_upgrade_units:
+  - corosync
+  - corosync-qdevice
+  - pacemaker
+  - sbd
+__pacemaker_upgrade_retries: >-
+  {{ [((pacemaker_upgrade_timeout | int) / ([pacemaker_upgrade_poll_delay | int, 1] | max)) | round(0, 'ceil') | int, 1] | max }}
+# Member node elements of crm_mon's XML: one line each, the only node lines that hold online=
+__pacemaker_upgrade_lines: >-
+  {{ __pacemaker_upgrade_mon.stdout_lines | select('search', '<node name="') | select('search', ' online="')
+     | select('search', ' type="member"') | list }}
+__pacemaker_upgrade_name_re: '^.*<node name="([^"]*)".*$'
+__pacemaker_upgrade_members: "{{ __pacemaker_upgrade_lines | map('regex_replace', __pacemaker_upgrade_name_re, '\\1') | list }}"
+__pacemaker_upgrade_self: >-
+  {{ __pacemaker_upgrade_lines | select('search', '<node name="' ~ (__pacemaker_upgrade_node.stdout | regex_escape) ~ '"')
+     | list }}
+__pacemaker_upgrade_peers: >-
+  {{ (pacemaker_upgrade_nodes if pacemaker_upgrade_nodes | length > 0 else __pacemaker_upgrade_members)
+     | reject('equalto', __pacemaker_upgrade_node.stdout) | list }}
+__pacemaker_upgrade_ready: >-
+  {{ __pacemaker_upgrade_lines | select('search', ' online="true"') | select('search', ' standby="false"')
+     | map('regex_replace', __pacemaker_upgrade_name_re, '\1') | list }}
+# apt list --upgradable: name/suite version arch [upgradable from: ...]; the names a pattern matches from the start
+__pacemaker_upgrade_pending: >-
+  {{ __pacemaker_upgrade_apt.stdout_lines | select('search', '/') | map('regex_replace', '/.*', '')
+     | select('match', '(' ~ (pacemaker_upgrade_patterns | join(')|(')) ~ ')') | list }}
+__pacemaker_upgrade_was_active: >-
+  {{ __pacemaker_upgrade_units | zip(__pacemaker_upgrade_before.stdout_lines) | selectattr('1', 'equalto', 'active')
+     | map(attribute='0') | list }}
 # The role's pacemaker.service drop-ins and the DRBD wait; only files with these prefixes are ever removed
 __pacemaker_dropin_dir: /etc/systemd/system/pacemaker.service.d
 __pacemaker_dropin_prefix: ansible-
