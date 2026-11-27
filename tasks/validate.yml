@@ -28,6 +28,42 @@
       pacemaker_cib_patch_retries 0-99
     quiet: true
 
+# A unit or resource name lands in a drop-in and its file name: one token, no newline adding a directive
+- name: Systemd ordering and DRBD wait settings are sound
+  ansible.builtin.assert:
+    that:
+      - __pacemaker_unit_lists | reject('sequence') | list | length == 0
+      - __pacemaker_unit_lists | select('string') | list | length == 0
+      - __pacemaker_unit_lists | select('mapping') | list | length == 0
+      - __pacemaker_unit_lists | flatten(levels=1) | map('string')
+        | reject('match', '^[A-Za-z0-9][A-Za-z0-9@_.:\\\\-]{0,200}\.(service|socket|target|mount|automount|swap|path|timer|device|slice|scope)\Z')
+        | list | length == 0
+      - __pacemaker_unit_lists | flatten(levels=1) | map('string') | select('in', ['pacemaker.service']) | list | length == 0
+      # One unit in one list: a unit in two would get two drop-ins of different strength
+      - (__pacemaker_unit_lists[:3] | flatten(levels=1) | map('string') | unique | length)
+        == (__pacemaker_unit_lists[:3] | flatten(levels=1) | length)
+      - (pacemaker_drbd_wait_after | map('string') | unique | length) == (pacemaker_drbd_wait_after | length)
+      - pacemaker_drbd_wait_resources is sequence and pacemaker_drbd_wait_resources is not string
+      - pacemaker_drbd_wait_resources is not mapping
+      - pacemaker_drbd_wait_resources | map('string') | reject('match', '^[A-Za-z0-9][A-Za-z0-9_.+-]{0,127}\Z') | list | length == 0
+      - (pacemaker_drbd_wait_resources | map('string') | unique | length) == (pacemaker_drbd_wait_resources | length)
+      - pacemaker_drbd_wait_timeout | string is match('^[1-9][0-9]{0,4}\Z')
+      - pacemaker_drbd_wait_resource_dir is string
+      - pacemaker_drbd_wait_resource_dir is match('^(/[A-Za-z0-9._/-]{0,250})?\Z')
+    fail_msg: >-
+      pacemaker_systemd_after, pacemaker_systemd_wants, pacemaker_systemd_requires and pacemaker_drbd_wait_after: lists
+      of full systemd unit names (e.g. ups-monitor.service, data.mount), not pacemaker.service, a unit in one of the first
+      three lists only, no duplicate; pacemaker_drbd_wait_resources a list of DRBD resource names, no duplicate;
+      pacemaker_drbd_wait_timeout seconds, 1-99999; pacemaker_drbd_wait_resource_dir empty or an absolute path
+    quiet: true
+  vars:
+    __pacemaker_unit_lists:
+      - "{{ pacemaker_systemd_after }}"
+      - "{{ pacemaker_systemd_wants }}"
+      - "{{ pacemaker_systemd_requires }}"
+      - "{{ pacemaker_drbd_wait_after }}"
+  when: pacemaker_state == 'present'
+
 - name: SBD settings are sound
   ansible.builtin.assert:
     that:

@@ -16,6 +16,10 @@
     - name: Packages
       ansible.builtin.include_tasks: install.yml
 
+    # Before any stack (re)start below, so that start already runs with them
+    - name: Systemd ordering and DRBD wait of pacemaker.service
+      ansible.builtin.include_tasks: systemd.yml
+
     - name: SBD
       ansible.builtin.include_tasks: sbd.yml
       when: pacemaker_sbd
