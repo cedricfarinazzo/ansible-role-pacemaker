@@ -37,6 +37,7 @@
     that:
       - __pacemaker_upgrade_self | length == 1 and __pacemaker_upgrade_self[0] is search(' online="true"')
       - __pacemaker_upgrade_peers | length > 0
+      - __pacemaker_upgrade_peers | difference(__pacemaker_upgrade_ready) | length == 0
     fail_msg: >-
       {{ __pacemaker_upgrade_node.stdout }} not upgraded:
       {{ ('no other node to take its resources' if __pacemaker_upgrade_peers | length == 0 else
