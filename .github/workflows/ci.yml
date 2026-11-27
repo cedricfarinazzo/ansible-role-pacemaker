@@ -33,9 +33,11 @@ jobs:
           sys.exit(f'meta/main.yml description: {len(d)} characters, Galaxy accepts 255') if len(d) > 255 else print(len(d), 'characters')
           "
       - run: ansible-lint
-      - run: shellcheck run-tests.sh tests/*.sh molecule/shared/*.sh
+      - run: shellcheck run-tests.sh tests/*.sh molecule/shared/*.sh files/pacemaker-drbd-wait
       # The input checks: every bad input fails before any change
       - run: tests/validate.test.sh
+      # The DRBD wait script on a stub drbdsetup
+      - run: tests/drbd-wait.test.sh
 
   molecule:
     runs-on: ubuntu-26.04
@@ -71,6 +73,7 @@ jobs:
           - resources
           - resources-multi
           - resources-atomic
+          - systemd
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0

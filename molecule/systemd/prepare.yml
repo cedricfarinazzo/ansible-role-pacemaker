@@ -1,0 +1,44 @@
+---
+- name: Shared preparation
+  ansible.builtin.import_playbook: ../shared/prepare.yml
+
+# A drop-in the role wrote for a unit since dropped, and drop-ins of the host's own that the role never touches
+- name: Drop-ins before the role, and the units pacemaker is ordered on
+  hosts: nodes
+  tasks:
+    - name: Pacemaker drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/pacemaker.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Drop-ins
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/pacemaker.service.d/{{ item.name }}"
+        content: "{{ item.content }}"
+        mode: "0644"
+      loop:
+        - name: ansible-after-old.service.conf
+          content: "[Unit]\nAfter=old.service\n"
+        - name: override.conf
+          content: "[Service]\nEnvironment=MOLECULE_USER=1\n"
+        - name: after-molecule-monitor.service.conf
+          content: "[Unit]\nAfter=user.service\n"
+        - name: ansible-local.conf
+          content: "[Unit]\nDocumentation=man:molecule(1)\n"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # Pacemaker requires and wants them: they start when it does
+    - name: Units pacemaker wants and requires
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item }}"
+        content: "[Service]\nType=oneshot\nRemainAfterExit=true\nExecStart=/bin/true\n"
+        mode: "0644"
+      loop:
+        - molecule-want.service
+        - molecule-need.service
+
+    - name: Systemd reads them
+      ansible.builtin.systemd_service:
+        daemon_reload: true

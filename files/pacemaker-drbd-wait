@@ -1,0 +1,39 @@
+#!/bin/sh
+# pacemaker-drbd-wait [-d DIR] SECONDS RESOURCE...
+# Waits until every local volume of each DRBD resource is UpToDate, all resources within one deadline of SECONDS.
+# A resource still not UpToDate at the deadline is logged and skipped. With -d, a resource without DIR/<name>.res
+# is not configured on this host and is skipped. Always exits 0: a late disk never keeps pacemaker down.
+me=pacemaker-drbd-wait
+dir=
+while getopts d: opt; do
+  case $opt in
+    d) dir=$OPTARG ;;
+    *) echo "$me: usage: $me [-d DIR] SECONDS RESOURCE..."; exit 0 ;;
+  esac
+done
+shift $((OPTIND - 1))
+t=${1:-}
+case $t in
+  '' | *[!0-9]*) echo "$me: usage: $me [-d DIR] SECONDS RESOURCE..."; exit 0 ;;
+esac
+shift
+end=$(($(date +%s) + t))
+
+# The local disk:<state> fields only (one per volume), never peer-disk:; none (no such resource) is not up to date
+uptodate() {
+  drbdsetup status "$1" 2>/dev/null | awk '
+    { for (i = 1; i <= NF; i++) if ($i ~ /^disk:/) { n++; if ($i != "disk:UpToDate") bad = 1 } }
+    END { exit !(n > 0 && !bad) }'
+}
+
+for r in "$@"; do
+  if [ -n "$dir" ] && [ ! -e "$dir/$r.res" ]; then continue; fi
+  until uptodate "$r"; do
+    if [ "$(date +%s)" -ge "$end" ]; then
+      echo "$me: $r: local disk not UpToDate after $t s, starting pacemaker anyway"
+      break
+    fi
+    sleep 1
+  done
+done
+exit 0

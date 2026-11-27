@@ -20,3 +20,22 @@ __pacemaker_unset_rc:
 # cibadmin --patch on a CIB changed since the copy: CRM_EX_OLD, "Update was older than existing configuration"
 __pacemaker_cib_stale_rc:
   - 103
+# The role's pacemaker.service drop-ins and the DRBD wait; only files with these prefixes are ever removed
+__pacemaker_dropin_dir: /etc/systemd/system/pacemaker.service.d
+__pacemaker_dropin_prefix: ansible-
+__pacemaker_drbd_wait_script: /usr/local/sbin/pacemaker-drbd-wait
+# Seconds added to the wait's deadline for pacemaker's own start (TimeoutStartSec=)
+__pacemaker_drbd_wait_start_margin: 60
+__pacemaker_dropin_patterns:
+  - "{{ __pacemaker_dropin_prefix }}after-*.conf"
+  - "{{ __pacemaker_dropin_prefix }}wants-*.conf"
+  - "{{ __pacemaker_dropin_prefix }}requires-*.conf"
+  - "{{ __pacemaker_dropin_prefix }}drbd-wait.conf"
+# [kind, unit] of every ordering drop-in, and the file names the role keeps
+__pacemaker_ordering: >-
+  {{ (['after'] | product(pacemaker_systemd_after) | list) + (['wants'] | product(pacemaker_systemd_wants) | list)
+     + (['requires'] | product(pacemaker_systemd_requires) | list) }}
+__pacemaker_dropins_wanted: >-
+  {{ __pacemaker_ordering | map('join', '-') | map('regex_replace', '^', __pacemaker_dropin_prefix)
+     | product(['.conf']) | map('join') | list
+     + ([__pacemaker_dropin_prefix ~ 'drbd-wait.conf'] if pacemaker_drbd_wait_resources | length > 0 else []) }}

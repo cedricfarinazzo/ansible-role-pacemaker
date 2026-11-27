@@ -55,5 +55,23 @@ pacemaker_rejoin_units:
 # (LogLevelMax=, e.g. notice drops those info lines every interval); empty logs everything
 pacemaker_rejoin_log_level_max: ""
 
+# systemd ordering of pacemaker.service, one drop-in per unit in /etc/systemd/system/pacemaker.service.d/, named by
+# the full unit name. Pacemaker starts after (and stops before) each unit of pacemaker_systemd_after; it also pulls in
+# (Wants=) each of pacemaker_systemd_wants, and needs (Requires=: a failed unit keeps pacemaker down) each of
+# pacemaker_systemd_requires. A unit dropped from a list loses its drop-in; only a daemon-reload, never a restart
+pacemaker_systemd_after: []
+pacemaker_systemd_wants: []
+pacemaker_systemd_requires: []
+
+# DRBD resources whose local disk pacemaker waits for, UpToDate, before it starts (an ExecStartPre); [] is no wait
+pacemaker_drbd_wait_resources: []
+# Seconds: one deadline over every resource; a resource still not UpToDate is logged and pacemaker starts anyway
+pacemaker_drbd_wait_timeout: 90
+# Units the wait starts after, e.g. the service that brings the DRBD resources up
+pacemaker_drbd_wait_after: []
+# A directory of <resource>.res files: a resource without one is not configured on this host and is not waited for;
+# empty waits for every listed resource
+pacemaker_drbd_wait_resource_dir: ""
+
 # Seconds to wait for a node to rejoin after a stack restart, and for every node to be online
 pacemaker_join_timeout: 120
