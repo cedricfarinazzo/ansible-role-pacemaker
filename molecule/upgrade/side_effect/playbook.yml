@@ -371,7 +371,8 @@
     - name: The run fails on the audit, never starts the stack
       ansible.builtin.assert:
         that:
-          - molecule_run.stdout is search('TASK [^\n]*Nothing left half-configured[^\n]*\n[^\n]*fatal. \[' ~ groups['nodes'][2])
+          - >-
+            molecule_run.stdout is search('fatal: \\[' ~ groups['nodes'][2] ~ '\\]: FAILED! => [^\\n]*"cmd": \\["dpkg", "--audit"\\]')
           - molecule_run.stdout is search('molecule-audit-seed')
           - molecule_run.stdout is not search('TASK [^\n]*Start the stack')
         fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
