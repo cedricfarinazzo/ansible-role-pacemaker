@@ -74,7 +74,7 @@
       - --audit
   register: __pacemaker_upgrade_audit
   changed_when: false
-  failed_when: __pacemaker_upgrade_audit.rc != 0
+  failed_when: __pacemaker_upgrade_audit.rc != 0 or __pacemaker_upgrade_audit.stdout | length > 0
 
 # pacemaker pulls corosync and sbd up; a quorum device that ran before is started by name
 - name: Start the stack  # noqa: command-instead-of-module
