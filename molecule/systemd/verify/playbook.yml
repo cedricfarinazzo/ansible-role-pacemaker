@@ -1,0 +1,98 @@
+---
+- name: Verify
+  hosts: nodes
+  gather_facts: false
+  vars:
+    dropins: /etc/systemd/system/pacemaker.service.d
+  tasks:
+    - name: Every node online with quorum
+      ansible.builtin.include_tasks: ../../shared/online.yml
+
+    - name: Read the drop-ins
+      ansible.builtin.slurp:
+        src: "{{ dropins }}/{{ item.key }}"
+      loop: "{{ want | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: conf
+      vars:
+        want: &want
+          ansible-after-molecule-monitor.service.conf: "[Unit]\nAfter=molecule-monitor.service\n"
+          ansible-after-molecule-monitor.socket.conf: "[Unit]\nAfter=molecule-monitor.socket\n"
+          ansible-wants-molecule-want.service.conf: "[Unit]\nAfter=molecule-want.service\nWants=molecule-want.service\n"
+          ansible-requires-molecule-need.service.conf: "[Unit]\nAfter=molecule-need.service\nRequires=molecule-need.service\n"
+          ansible-drbd-wait.conf: "[Unit]\nAfter=molecule-drbd.service\n[Service]\nTimeoutStartSec=64\n\
+            ExecStartPre=/usr/local/sbin/pacemaker-drbd-wait -d /etc/molecule-drbd 4 r0 r1 r2\n"
+          # The host's own, and a stale-looking name outside the role's prefixes: left as they were
+          override.conf: "[Service]\nEnvironment=MOLECULE_USER=1\n"
+          after-molecule-monitor.service.conf: "[Unit]\nAfter=user.service\n"
+          ansible-local.conf: "[Unit]\nDocumentation=man:molecule(1)\n"
+
+    - name: Each drop-in byte for byte
+      ansible.builtin.assert:
+        that: item.content | b64decode == item.item.value
+        fail_msg: "{{ item.item.key }}: {{ item.content | b64decode | to_json }} != {{ item.item.value | to_json }}"
+        quiet: true
+      loop: "{{ conf.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+
+    - name: List the drop-in directory
+      ansible.builtin.find:
+        paths: "{{ dropins }}"
+        patterns: "*"
+      register: listing
+
+    - name: The stale drop-in removed, nothing else there
+      ansible.builtin.assert:
+        that: listing.files | map(attribute='path') | map('basename') | sort == want.keys() | sort
+        fail_msg: "{{ listing.files | map(attribute='path') | map('basename') | sort }}"
+      vars:
+        want: *want
+
+    - name: Read the wait script
+      ansible.builtin.slurp:
+        src: /usr/local/sbin/pacemaker-drbd-wait
+      register: script
+
+    - name: Stat the wait script
+      ansible.builtin.stat:
+        path: /usr/local/sbin/pacemaker-drbd-wait
+      register: script_stat
+
+    - name: The wait script is the role's, executable
+      ansible.builtin.assert:
+        that:
+          - script.content | b64decode == lookup('ansible.builtin.file', playbook_dir ~ '/../../../files/pacemaker-drbd-wait', rstrip=false)
+          - script_stat.stat.mode == '0755'
+
+    # What systemd made of them: the drop-ins are read, valid and in effect
+    - name: Read pacemaker.service as systemd has it  # noqa: command-instead-of-module
+      ansible.builtin.command: >-
+        systemctl show pacemaker.service -p After -p Wants -p Requires -p TimeoutStartUSec -p ExecStartPre
+        -p Environment -p NeedDaemonReload
+      register: unit
+      changed_when: false
+
+    - name: Systemd applies every drop-in
+      ansible.builtin.assert:
+        that:
+          - "'molecule-monitor.service' in u.After"
+          - "'molecule-monitor.socket' in u.After"
+          - "'molecule-drbd.service' in u.After"
+          - "'molecule-want.service' in u.After"
+          - "'molecule-need.service' in u.After"
+          - "'molecule-want.service' in u.Wants"
+          - "'molecule-need.service' in u.Requires"
+          - "'molecule-need.service' not in u.Wants"
+          - "'molecule-want.service' not in u.Requires"
+          - "'old.service' not in u.After"
+          - unit.stdout is search('(?m)^TimeoutStartUSec=1min 4s$')
+          - unit.stdout is search('pacemaker-drbd-wait ; argv\[\]=/usr/local/sbin/pacemaker-drbd-wait -d /etc/molecule-drbd 4 r0 r1 r2 ;')
+          - unit.stdout is search('(?m)^Environment=.*MOLECULE_USER=1')
+          - unit.stdout is search('(?m)^NeedDaemonReload=no$')
+        fail_msg: "{{ unit.stdout_lines }}"
+      vars:
+        u: >-
+          {{ dict(unit.stdout_lines | map('regex_replace', '=.*', '')
+             | zip(unit.stdout_lines | map('regex_replace', '^[^=]*=', '') | map('split'))) }}

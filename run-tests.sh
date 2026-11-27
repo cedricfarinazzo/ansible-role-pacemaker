@@ -15,7 +15,8 @@ show_usage() {
     echo "rejoin (a node boots with its peers unreachable, its stack start fails; the rejoin timer starts it once they are back),"
     echo "resources (a Dummy primitive and a location constraint: rerun, a timeout changed, entries dropped, bad input, absent),"
     echo "resources-multi (three primitives, every score kind: check mode, a parameter changed, locations moved, removal),"
-    echo "resources-atomic (a primitive started and moved in one run: one CIB update, never started on the node it leaves)."
+    echo "resources-atomic (a primitive started and moved in one run: one CIB update, never started on the node it leaves),"
+    echo "systemd (pacemaker.service ordering drop-ins and the DRBD wait: changed, dropped, check mode, a real start, absent)."
     echo "Several distributions, or 'all', run in parallel; each writes .molecule-logs/<distro>.log."
     echo
     echo "Supported: ${SUPPORTED// /, }"
