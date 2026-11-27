@@ -4,17 +4,18 @@ Orientation for Claude Code sessions in this repository. `AGENTS.md` is a symlin
 
 ## Purpose
 
-Public Ansible role `cedricfarinazzo.pacemaker` (Ansible Galaxy): Pacemaker on a running Corosync cluster, SBD fencing on a watchdog (diskless or with devices), cluster properties and resource/operation defaults set once from one node with `crm_attribute`, primitives and location constraints written with `cibadmin`, `pcsd` masked. Generic by design: no reference to any downstream project, host, user or network in code, defaults, docs or commit messages.
+Public Ansible role `cedricfarinazzo.pacemaker` (Ansible Galaxy): Pacemaker on a running Corosync cluster, SBD fencing on a watchdog (diskless or with devices), cluster properties and resource/operation defaults set once from one node with `crm_attribute`, primitives and location constraints written with `cibadmin`, `pcsd` masked, and a rolling upgrade of the cluster packages (`tasks_from: upgrade.yml`). Generic by design: no reference to any downstream project, host, user or network in code, defaults, docs or commit messages.
 
 ## Layout
 
 - `defaults/main.yml` — every user-facing variable (`pacemaker_*`), with its generic default.
 - `vars/main.yml` — package list, the pcsd units masked, `/etc/default/sbd` path, the CIB sections and their inputs, crm_attribute's "not set" exit codes.
 - `tasks/main.yml` — `validate.yml` (every input), then for `present`: `corosync.yml` (corosync active and quorate on every play host, before any change), `install.yml` (packages, `pcsd` and `pcsd-ruby` masked, `openipmi` masked on opt-in), `restart_check.yml` (a stack restart refused on every node unless `pacemaker_allow_restart`, before any package), `sbd.yml` (watchdog checks, device headers, `/etc/default/sbd`, rolling stack restart) or `sbd_off.yml`, `service.yml` (pacemaker running, every node online), `rejoin.yml` (the opt-in rejoin timer, or its removal), `properties.yml` (read, write the differences, read back; run_once), `resources.yml` (primitives and location constraints: agents checked, each element queried, every create and replace built on a `CIB_file` copy and applied as one `cibadmin --patch` by `files/cib_patch.py`, rerun from a fresh copy when the patch is refused as stale, read back; `resource_absent.yml` stops a primitive before deleting it and its locations; run_once); for `absent`: `absent.yml`.
+- `tasks/upgrade.yml` — the rolling upgrade entry point, never run by `main.yml`: `upgrade_validate.yml`, apt only, peers Online and out of standby (`crm_mon` XML, `crm_node --name`), the matching upgradable packages; `upgrade_node.yml` (standby, resources off, `pacemaker` and `corosync` stopped together, `apt-get install --only-upgrade`, `dpkg --audit`, the units that ran before started, standby deleted, Online).
 - `files/cib_patch.py` — copy, edit, diff and patch of the CIB in one process (a short race window); retries only on exit 103 (CRM_EX_OLD, the CIB changed since the copy), `pacemaker_cib_patch_retries` times; `__pacemaker_cib_patch_hook` (tests only) runs a command between diff and patch on the first attempt.
 - `templates/sbd.j2` — `/etc/default/sbd`; `pacemaker-rejoin.{service,timer}.j2` — the timer that restarts a failed stack start.
 - `meta/main.yml` — Galaxy metadata; `platforms` lists exactly what CI tests.
-- `molecule/shared/` — `collections.yml` (the docker driver and the corosync role's release tag), `prepare.yml` (policy-rc.d removed, a stand-in watchdog character device, qnetd on the `qnetd` group), `converge.yml` (corosync role, then this one), `run.sh` and `recap.yml` (a rerun from the control node, its recap checked), `online.yml`, `cib.yml` (the CIB matches the resource inputs, on every node), `cleanup.yml` (the cluster services stopped) and `destroy.yml` (the driver's destroy with a 300 s API timeout and retries), used by every scenario.
+- `molecule/shared/` — `collections.yml` (the docker driver and the corosync role's release tag), `prepare.yml` (policy-rc.d removed, a stand-in watchdog character device, qnetd on the `qnetd` group), `converge.yml` (corosync role, then this one), `run.sh` and `recap.yml` (a rerun from the control node, its recap checked; `molecule_playbook` runs another play), `online.yml`, `cib.yml` (the CIB matches the resource inputs, on every node), `cleanup.yml` (the cluster services stopped) and `destroy.yml` (the driver's destroy with a 300 s API timeout and retries), used by every scenario.
 - `molecule/default/` — three nodes, every distribution; reruns: no change, check mode (converged, a pending mask, pending properties), properties changed and deleted, absent twice.
 - `molecule/qdevice/` — two nodes and a qnetd host; a node down and back.
 - `molecule/sbd-off/` — no SBD; SBD on config-only and off again.
@@ -23,8 +24,9 @@ Public Ansible role `cedricfarinazzo.pacemaker` (Ansible Galaxy): Pacemaker on a
 - `molecule/resources/` — two nodes, a Dummy primitive and a location: rerun, a timeout changed (only that element written), entries dropped and kept, bad id and unknown agent refused, absent stops then removes.
 - `molecule/resources-multi/` — three nodes, three primitives, every score kind: check mode (converged, a pending replace, pending removals), a parameter change (restart), a location moved and one removed, a hand edit undone, two removed together.
 - `molecule/resources-atomic/` — two nodes: a stopped primitive started and moved in one run, never started on the node it leaves; a status update forced between copy and patch, retried, written once.
+- `molecule/upgrade/` — three nodes, a local apt repository (`publish.yml` builds stand-in packages, `state.yml` reads versions and standby) and `upgrade.yml`, the consumer play: check mode, refusals, one node then the rest, rerun, a stop slower than the timeout.
 - `molecule/failure/` — failure paths on a two-node cluster, then verify nothing changed.
-- `tests/validate.test.sh` — good and bad inputs against `tasks/validate.yml` on localhost.
+- `tests/validate.test.sh` — good and bad inputs against `tasks/validate.yml` and `tasks/upgrade_validate.yml` on localhost.
 - `run-tests.sh` / `Makefile` — local Molecule entry points; several distros or `all` run in parallel, one log each in `.molecule-logs/`.
 - `requirements.yml` (none at runtime), `requirements-dev.txt` (controller tooling, exact pins), `package.json`, `bun.lock`, `.releaserc.json` (semantic-release only).
 - `.github/workflows/` — `ci.yml` (lint, Galaxy description length, shellcheck, input tests, default on every distribution, the other scenarios on Debian 13), `pr-title.yml`, `release.yml`.
@@ -44,6 +46,7 @@ Public Ansible role `cedricfarinazzo.pacemaker` (Ansible Galaxy): Pacemaker on a
 - **A stale CIB patch is retried, nothing else:** only `cibadmin --patch` exit 103 ("Update was older than existing configuration", Pacemaker 3.0, a status update suffices) reruns the whole sequence from a fresh copy; any other exit fails at once.
 - **CIB writes are run_once and only for values that differ;** each is read back. Check mode reports each pending write as changed (a `debug` with `changed_when: true`) and writes nothing; a converged cluster checks `changed=0`. No `pcs` command that needs `pcsd`.
 - **The rejoin timer only acts on a failed sbd, corosync or pacemaker,** never on a clean stop, and only through the normal unit chain (sbd first, corosync membership and quorum).
+- **The rolling upgrade stops `pacemaker` and `corosync` in one command, only after the node is in standby with no resource and every other node is Online and out of standby;** any failure leaves the node as it is, nothing undone. Its inputs are checked by `upgrade_validate.yml`, not `validate.yml` (`main.yml` never runs it).
 - **The role never writes an SBD device header** (`sbd create` erases the device).
 - **Examples never copy a real deployment:** `example.com` names, documentation addresses.
 - **GitHub Actions pinned by full commit SHA**, tag in a trailing comment. Exact pins for tooling; `renovate.json` identical in the sibling roles: change them together.
@@ -77,6 +80,7 @@ Public Ansible role `cedricfarinazzo.pacemaker` (Ansible Galaxy): Pacemaker on a
 - `item.values` in Jinja is the dict method, not a key: the CIB set's key is `settings`.
 - A container has no watchdog: `sbd` runs on a `mknod` character device (`/dev/null`'s numbers) with `sbd-service`; the other scenarios use `pacemaker_sbd_service: false`.
 - Docker's 64 MB `/dev/shm` fills with corosync's and pacemaker's libqb buffers ("Cannot initialise VOTEQUORUM service", "No space left on device" in corosync's journal): every platform sets `shm_size: 512m`.
+- `meta: end_host` in a `tasks_from` entry point ends the host for the rest of the consumer's play: `upgrade.yml` skips with a `when` on an `include_tasks` instead.
 - Docker can take over 60 s to remove a systemd container, even with the cluster services stopped: the driver's destroy fails with `Error removing container ... Read timed out. (read timeout=60)` and a rerun passes. Every scenario uses `molecule/shared/destroy.yml` (`timeout: 300`, retried).
 
 ## Self Improvement Loop

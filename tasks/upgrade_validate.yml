@@ -1,0 +1,18 @@
+---
+# A pattern reaches a regex matched against package names, and each match apt-get's argv: no newline, no grouping
+- name: Rolling upgrade settings are sound
+  ansible.builtin.assert:
+    that:
+      - pacemaker_upgrade_patterns is sequence and pacemaker_upgrade_patterns is not string
+      - pacemaker_upgrade_patterns is not mapping and pacemaker_upgrade_patterns | length > 0
+      - pacemaker_upgrade_patterns | map('string') | reject('match', '^[A-Za-z0-9.+*?^$\[\]-]{1,128}\Z') | list | length == 0
+      - pacemaker_upgrade_nodes is sequence and pacemaker_upgrade_nodes is not string
+      - pacemaker_upgrade_nodes is not mapping
+      - pacemaker_upgrade_nodes | map('string') | reject('match', '^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}\Z') | list | length == 0
+      - pacemaker_upgrade_timeout | string is match('^[1-9][0-9]{0,4}\Z')
+      - pacemaker_upgrade_poll_delay | string is match('^[1-9][0-9]{0,2}\Z')
+    fail_msg: >-
+      pacemaker_upgrade_patterns a non-empty list of package-name patterns ([A-Za-z0-9.+*?^$[]-], matched from the
+      name's start, no grouping or alternation); pacemaker_upgrade_nodes a list of node names ([] reads them from the
+      cluster); pacemaker_upgrade_timeout seconds, 1-99999; pacemaker_upgrade_poll_delay seconds, 1-999
+    quiet: true

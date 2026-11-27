@@ -1,7 +1,7 @@
 # Define supported distributions
 SUPPORTED_DISTROS := debian13 ubuntu2404 ubuntu2604
 DEFAULT_DISTRO := debian13
-SCENARIOS := qdevice sbd-off sbd-service failure rejoin resources resources-multi
+SCENARIOS := qdevice sbd-off sbd-service failure rejoin resources resources-multi resources-atomic upgrade
 
 .PHONY: molecule-test molecule-test-all lint help check-prereqs test $(addprefix molecule-test-,$(SCENARIOS))
 

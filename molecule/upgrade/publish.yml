@@ -1,0 +1,25 @@
+---
+# Tasks: version molecule_version of the two stand-in packages built and published in the node's local repository.
+# molecule-cluster-tool matches the scenario's pattern: its postinst records the stack units' state at upgrade time.
+# other-molecule-cluster-tool holds the pattern but not at its start: never upgraded by the role.
+- name: Stand-in packages, version {{ molecule_version }}
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      build() {
+        d=$(mktemp -d)
+        mkdir -p "$d/DEBIAN"
+        printf 'Package: %s\nVersion: %s\nArchitecture: all\nMaintainer: Molecule <molecule@example.com>\nDescription: stand-in\n' \
+          "$1" "{{ molecule_version }}" > "$d/DEBIAN/control"
+        printf '#!/bin/sh\n{ echo %s; systemctl is-active corosync pacemaker; } > /var/lib/%s.stack || true\n' \
+          "{{ molecule_version }}" "$1" > "$d/DEBIAN/postinst"
+        chmod 0755 "$d/DEBIAN/postinst"
+        dpkg-deb --build --root-owner-group "$d" "/srv/molecule-repo/$1_{{ molecule_version }}_all.deb" > /dev/null
+        rm -rf "$d"
+      }
+      mkdir -p /srv/molecule-repo
+      build molecule-cluster-tool
+      build other-molecule-cluster-tool
+      cd /srv/molecule-repo && apt-ftparchive packages . > Packages
+  args:
+    creates: /srv/molecule-repo/molecule-cluster-tool_{{ molecule_version }}_all.deb

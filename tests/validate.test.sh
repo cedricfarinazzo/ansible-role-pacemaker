@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The role's input checks: each bad input fails before anything changes, the good ones pass.
-# Runs tasks/validate.yml on localhost; needs ansible-playbook on PATH, no host.
+# Runs tasks/validate.yml (and tasks/upgrade_validate.yml) on localhost; needs ansible-playbook on PATH, no host.
 set -euo pipefail
 
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -16,7 +16,7 @@ cat > "$WORK/play.yml" <<'PLAY'
     - name: Validate
       ansible.builtin.include_role:
         name: pacemaker
-        tasks_from: validate.yml
+        tasks_from: "{{ molecule_tasks | default('validate.yml') }}"
 PLAY
 fails=0
 run() { ANSIBLE_ROLES_PATH=$WORK/roles ansible-playbook -i localhost, -c local -e "$1" "$WORK/play.yml" > "$WORK/out" 2>&1; }
@@ -140,6 +140,27 @@ bad "an unknown operation key" '{"pacemaker_primitives": [{"id": "web", "class":
 bad "an unknown primitive key" '{"pacemaker_primitives": [{"id": "web", "class": "ocf", "provider": "heartbeat", "type": "IPaddr2", "group": "g"}]}'
 bad "a null attribute value" '{"pacemaker_primitives": [{"id": "web", "class": "ocf", "provider": "heartbeat", "type": "IPaddr2", "instance_attributes": {"ip": null}}]}'
 bad "an unknown location key" '{"pacemaker_primitives": [{"id": "web", "class": "ocf", "provider": "heartbeat", "type": "IPaddr2"}], "pacemaker_location_constraints": [{"id": "web-on-a", "resource": "web", "node": "node-a.example.com", "score": "INFINITY", "role": "Promoted"}]}'
+
+# The rolling upgrade's inputs, checked by tasks/upgrade_validate.yml
+up() { echo "{\"molecule_tasks\": \"upgrade_validate.yml\", ${1#\{}"; }
+good "upgrade: the defaults" "$(up '{}')"
+good "upgrade: patterns, nodes, timeouts" "$(up '{"pacemaker_upgrade_patterns": ["pacemaker", "libpe-", "corosync-qdevice$"], "pacemaker_upgrade_nodes": ["node-a.example.com", "node-b"], "pacemaker_upgrade_timeout": 600, "pacemaker_upgrade_poll_delay": 2}')"
+good "upgrade: a character class" "$(up '{"pacemaker_upgrade_patterns": ["libknet[0-9]"]}')"
+bad "upgrade: no pattern" "$(up '{"pacemaker_upgrade_patterns": []}')"
+bad "upgrade: patterns as a string" "$(up '{"pacemaker_upgrade_patterns": "pacemaker"}')"
+bad "upgrade: a pattern with a trailing newline" "$(up '{"pacemaker_upgrade_patterns": ["pacemaker\n"]}')"
+bad "upgrade: a pattern with an embedded newline" "$(up '{"pacemaker_upgrade_patterns": ["pacemaker\nopenssh"]}')"
+bad "upgrade: a pattern with alternation" "$(up '{"pacemaker_upgrade_patterns": ["pacemaker|.*"]}')"
+bad "upgrade: a pattern with a space" "$(up '{"pacemaker_upgrade_patterns": ["pacemaker openssh-server"]}')"
+bad "upgrade: an empty pattern" "$(up '{"pacemaker_upgrade_patterns": [""]}')"
+bad "upgrade: nodes as a string" "$(up '{"pacemaker_upgrade_nodes": "node-a"}')"
+bad "upgrade: a node with a trailing newline" "$(up '{"pacemaker_upgrade_nodes": ["node-a\n"]}')"
+bad "upgrade: a node with a quote" "$(up '{"pacemaker_upgrade_nodes": ["node-a\""]}')"
+bad "upgrade: a timeout of 0" "$(up '{"pacemaker_upgrade_timeout": 0}')"
+bad "upgrade: a timeout with a trailing newline" "$(up '{"pacemaker_upgrade_timeout": "300\n"}')"
+bad "upgrade: a timeout with a unit" "$(up '{"pacemaker_upgrade_timeout": "300s"}')"
+bad "upgrade: a poll delay of 0" "$(up '{"pacemaker_upgrade_poll_delay": 0}')"
+bad "upgrade: a poll delay with an embedded newline" "$(up '{"pacemaker_upgrade_poll_delay": "5\n1"}')"
 
 if [[ $fails -gt 0 ]]; then echo "$fails failed" >&2; exit 1; fi
 echo "all passed"

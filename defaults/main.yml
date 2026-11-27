@@ -57,3 +57,38 @@ pacemaker_rejoin_log_level_max: ""
 
 # Seconds to wait for a node to rejoin after a stack restart, and for every node to be online
 pacemaker_join_timeout: 120
+
+# Rolling upgrade (tasks_from: upgrade.yml, from a serial: 1, any_errors_fatal play): package-name patterns
+# (Python regexes, matched from the name's start) upgraded only with the node in standby and its stack stopped
+pacemaker_upgrade_patterns:
+  - corosync
+  - libcorosync
+  - libcfg
+  - libcmap
+  - libcpg
+  - libquorum
+  - libsam
+  - libvotequorum
+  - libknet
+  - libnozzle
+  - libqb
+  - pacemaker
+  - python3-pacemaker
+  - libpacemaker
+  - libpe-
+  - libcib
+  - libcrm
+  - liblrm
+  - libstonith
+  - sbd
+  - pcs
+  - crmsh
+  - resource-agents
+  - fence-agents
+# Nodes, by their cluster name, that must be Online and out of standby before a node stops; [] reads every member
+# node from the cluster
+pacemaker_upgrade_nodes: []
+# Seconds each wait may take (the resources off the node, the stack up, the node back Online), polled every
+# pacemaker_upgrade_poll_delay seconds
+pacemaker_upgrade_timeout: 300
+pacemaker_upgrade_poll_delay: 5

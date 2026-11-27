@@ -1,0 +1,136 @@
+---
+# Any failure from here leaves the node as it is (in standby, maybe stopped) for the operator: nothing is undone.
+- name: Standby, the resources move to the other nodes
+  ansible.builtin.command:
+    argv:
+      - crm_attribute
+      - --node
+      - "{{ __pacemaker_upgrade_node.stdout }}"
+      - --name
+      - standby
+      - --update
+      - "on"
+  changed_when: true
+
+- name: Wait until no resource runs here
+  ansible.builtin.command:
+    argv:
+      - crm_mon
+      - --one-shot
+      - --output-as=xml
+  register: __pacemaker_upgrade_mon
+  changed_when: false
+  failed_when: false
+  until: >-
+    __pacemaker_upgrade_self | length == 1 and __pacemaker_upgrade_self[0] is search(' standby="true"')
+    and __pacemaker_upgrade_self[0] is search(' resources_running="0"')
+  retries: "{{ __pacemaker_upgrade_retries }}"
+  delay: "{{ pacemaker_upgrade_poll_delay | int }}"
+
+- name: No resource runs here
+  ansible.builtin.assert:
+    that:
+      - __pacemaker_upgrade_self | length == 1
+      - __pacemaker_upgrade_self[0] is search(' standby="true"')
+      - __pacemaker_upgrade_self[0] is search(' resources_running="0"')
+    fail_msg: >-
+      {{ __pacemaker_upgrade_node.stdout }} still runs
+      {{ __pacemaker_upgrade_self[0] | default('') | regex_search('resources_running="([0-9]+)"', '\1') | first | default('?') }}
+      resource(s) after {{ pacemaker_upgrade_timeout }} s in standby: left in standby, stack running, nothing
+      upgraded. Check crm_mon, then delete the standby attribute or rerun.
+    quiet: true
+
+# One command: pacemaker alone leaves sbd and corosync up, and a package script then restarts the stack piecemeal
+- name: Stop pacemaker and corosync together  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - stop
+      - pacemaker
+      - corosync
+  changed_when: true
+
+- name: The stack is stopped
+  ansible.builtin.command:
+    argv: "{{ ['systemctl', 'is-active'] + __pacemaker_upgrade_units }}"
+  register: __pacemaker_upgrade_down
+  changed_when: false
+  failed_when: __pacemaker_upgrade_down.stdout_lines | reject('equalto', 'inactive') | list | length > 0
+
+# The stack stopped first: the maintainer scripts find nothing running to restart
+- name: Upgrade the cluster packages
+  ansible.builtin.command:
+    argv: >-
+      {{ ['apt-get', 'install', '-y', '-q', '--only-upgrade', '-o', 'Dpkg::Options::=--force-confold']
+         + __pacemaker_upgrade_pending }}
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  changed_when: true
+
+- name: Nothing left half-configured
+  ansible.builtin.command:
+    argv:
+      - dpkg
+      - --audit
+  register: __pacemaker_upgrade_audit
+  changed_when: false
+  failed_when: __pacemaker_upgrade_audit.rc != 0 or __pacemaker_upgrade_audit.stdout | length > 0
+
+# pacemaker pulls corosync and sbd up; a quorum device that ran before is started by name
+- name: Start the stack  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    argv: "{{ ['systemctl', 'start', 'pacemaker'] + (['corosync-qdevice'] if 'corosync-qdevice' in __pacemaker_upgrade_was_active else []) }}"
+  changed_when: true
+
+- name: Wait for every unit that ran before
+  ansible.builtin.command:
+    argv: "{{ ['systemctl', 'is-active'] + __pacemaker_upgrade_was_active }}"
+  register: __pacemaker_upgrade_up
+  changed_when: false
+  failed_when: false
+  until: __pacemaker_upgrade_up.stdout_lines | reject('equalto', 'active') | list | length == 0
+  retries: "{{ __pacemaker_upgrade_retries }}"
+  delay: "{{ pacemaker_upgrade_poll_delay | int }}"
+
+- name: The stack is up
+  ansible.builtin.assert:
+    that: __pacemaker_upgrade_up.stdout_lines | reject('equalto', 'active') | list | length == 0
+    fail_msg: >-
+      {{ __pacemaker_upgrade_node.stdout }}: {{ __pacemaker_upgrade_was_active | zip(__pacemaker_upgrade_up.stdout_lines)
+      | map('join', ' ') | join(', ') }} after {{ pacemaker_upgrade_timeout }} s; packages upgraded, left in standby
+    quiet: true
+
+- name: Out of standby, the node takes resources again
+  ansible.builtin.command:
+    argv:
+      - crm_attribute
+      - --node
+      - "{{ __pacemaker_upgrade_node.stdout }}"
+      - --name
+      - standby
+      - --delete
+  changed_when: true
+
+- name: Wait until this node is Online, out of standby
+  ansible.builtin.command:
+    argv:
+      - crm_mon
+      - --one-shot
+      - --output-as=xml
+  register: __pacemaker_upgrade_mon
+  changed_when: false
+  failed_when: false
+  until: >-
+    __pacemaker_upgrade_self | length == 1 and __pacemaker_upgrade_self[0] is search(' online="true"')
+    and __pacemaker_upgrade_self[0] is search(' standby="false"')
+  retries: "{{ __pacemaker_upgrade_retries }}"
+  delay: "{{ pacemaker_upgrade_poll_delay | int }}"
+
+- name: This node is back
+  ansible.builtin.assert:
+    that:
+      - __pacemaker_upgrade_self | length == 1
+      - __pacemaker_upgrade_self[0] is search(' online="true"')
+      - __pacemaker_upgrade_self[0] is search(' standby="false"')
+    fail_msg: "{{ __pacemaker_upgrade_node.stdout }} not Online out of standby after {{ pacemaker_upgrade_timeout }} s"
+    quiet: true

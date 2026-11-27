@@ -1,6 +1,6 @@
 ---
-# Tasks: a rerun of converge from the control node; molecule_args extra arguments, molecule_expect ok|fail;
-# registers molecule_run (stdout holds the recap).
+# Tasks: a rerun of converge (or molecule_playbook) from the control node; molecule_args extra arguments,
+# molecule_expect ok|fail; registers molecule_run (stdout holds the recap).
 - name: Run the role again
   ansible.builtin.command:
     argv: "{{ [playbook_dir ~ '/../../shared/run.sh'] + molecule_args }}"
@@ -8,6 +8,7 @@
   # molecule_label names the case in the output
   environment:
     MOLECULE_CASE: "{{ molecule_label }}"
+    MOLECULE_PLAYBOOK: "{{ molecule_playbook | default('') }}"
   changed_when: false
   failed_when: (molecule_run.rc == 0) != (molecule_expect == 'ok')
   delegate_to: localhost

@@ -1,0 +1,43 @@
+---
+- name: Shared preparation
+  ansible.builtin.import_playbook: ../shared/prepare.yml
+
+# Version 1.0 installed, 2.0 pending from a local repository: an upgrade the role can run without the archive
+- name: A local repository with pending upgrades
+  hosts: nodes
+  tasks:
+    - name: Apt-ftparchive is installed
+      ansible.builtin.apt:
+        name: apt-utils
+        state: present
+
+    - name: Version 1.0 is built
+      ansible.builtin.include_tasks: publish.yml
+      vars:
+        molecule_version: "1.0"
+
+    - name: Version 1.0 is installed
+      ansible.builtin.apt:
+        deb: /srv/molecule-repo/{{ item }}_1.0_all.deb
+      loop:
+        - molecule-cluster-tool
+        - other-molecule-cluster-tool
+
+    - name: Only newer versions stay in the repository
+      ansible.builtin.file:
+        path: /srv/molecule-repo/{{ item }}_1.0_all.deb
+        state: absent
+      loop:
+        - molecule-cluster-tool
+        - other-molecule-cluster-tool
+
+    - name: Version 2.0 is published
+      ansible.builtin.include_tasks: publish.yml
+      vars:
+        molecule_version: "2.0"
+
+    - name: The repository is an apt source
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/molecule.list
+        content: "deb [trusted=yes] file:/srv/molecule-repo ./\n"
+        mode: "0644"

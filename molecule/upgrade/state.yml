@@ -1,0 +1,29 @@
+---
+# Tasks: molecule_pkgs (per node: each stand-in package's version, then the state its postinst recorded),
+# molecule_standby (the nodes in standby) and molecule_where (the node running molecule-moving).
+- name: Package versions and the recorded stack state
+  ansible.builtin.shell:
+    cmd: >-
+      dpkg-query -W -f='${Package}=${Version}\n' molecule-cluster-tool other-molecule-cluster-tool;
+      echo "stack=$(paste -sd, /var/lib/molecule-cluster-tool.stack 2>/dev/null)"
+  register: molecule_pkgs
+  changed_when: false
+
+- name: The nodes in standby
+  ansible.builtin.shell:
+    cmd: set -o pipefail; crm_mon --one-shot --output-as=xml | sed -n 's/.*<node name="\([^"]*\)".* standby="true".*/\1/p'
+    executable: /bin/bash
+  register: molecule_standby
+  changed_when: false
+  run_once: true
+
+- name: Where molecule-moving runs
+  ansible.builtin.command:
+    argv:
+      - crm_resource
+      - --locate
+      - --resource
+      - molecule-moving
+  register: molecule_where
+  changed_when: false
+  run_once: true

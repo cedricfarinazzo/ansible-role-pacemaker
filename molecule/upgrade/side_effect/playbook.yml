@@ -1,0 +1,317 @@
+---
+# The rolling upgrade (tasks_from: upgrade.yml) from a serial: 1, any_errors_fatal play: check mode, refusals before
+# any change, one node upgraded (its resource moves away and back), the rest, a rerun, a stop that outlasts the timeout.
+- name: Rolling upgrade
+  hosts: nodes
+  gather_facts: false
+  vars:
+    molecule_playbook: "{{ playbook_dir }}/../upgrade.yml"
+    molecule_first: "{{ groups['nodes'][0] }}"
+    molecule_names: "{{ groups['nodes'] | map('regex_replace', '^([^-]+-[^-]+)-.*$', '\\1') | list }}"
+    molecule_untouched:
+      - molecule-cluster-tool=1.0
+      - other-molecule-cluster-tool=1.0
+      - stack=1.0,inactive,inactive
+  tasks:
+    - name: Check mode
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: check mode
+        molecule_args:
+          - --check
+        molecule_expect: ok
+
+    - name: Check mode names each node's packages
+      ansible.builtin.assert:
+        that: molecule_run.stdout is search(item ~ ': would upgrade molecule-cluster-tool"')
+        fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
+      loop: "{{ molecule_names }}"
+      run_once: true
+
+    - name: Read the cluster after check mode
+      ansible.builtin.include_tasks: ../state.yml
+
+    - name: Check mode changed nothing
+      ansible.builtin.assert:
+        that:
+          - molecule_pkgs.stdout_lines == molecule_untouched
+          - molecule_standby.stdout == ''
+        fail_msg: "{{ molecule_pkgs.stdout_lines }} standby: {{ molecule_standby.stdout_lines }}"
+
+    - name: A peer in standby
+      ansible.builtin.command:
+        argv:
+          - crm_attribute
+          - --node
+          - "{{ molecule_names[1] }}"
+          - --name
+          - standby
+          - --update
+          - "on"
+      changed_when: true
+      run_once: true
+
+    - name: Refused with a peer in standby
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: peer in standby
+        molecule_args: []
+        molecule_expect: fail
+
+    - name: The refusal names the peer
+      ansible.builtin.assert:
+        that: molecule_run.stdout is search(molecule_names[0] ~ ' not upgraded: ' ~ molecule_names[1] ~ ' not Online or in standby. Nothing changed.')
+        fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
+      run_once: true
+
+    - name: Read the cluster after the refusal
+      ansible.builtin.include_tasks: ../state.yml
+
+    - name: Nothing changed, only the peer in standby
+      ansible.builtin.assert:
+        that:
+          - molecule_pkgs.stdout_lines == molecule_untouched
+          - molecule_standby.stdout_lines == [molecule_names[1]]
+        fail_msg: "{{ molecule_pkgs.stdout_lines }} standby: {{ molecule_standby.stdout_lines }}"
+
+    - name: The peer out of standby
+      ansible.builtin.command:
+        argv:
+          - crm_attribute
+          - --node
+          - "{{ molecule_names[1] }}"
+          - --name
+          - standby
+          - --delete
+      changed_when: true
+      run_once: true
+
+    - name: A peer's stack stopped  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - stop
+          - pacemaker
+          - corosync
+      changed_when: true
+      when: inventory_hostname == groups['nodes'][2]
+
+    - name: The first node sees the peer offline
+      ansible.builtin.shell:
+        cmd: set -o pipefail; crm_mon --one-shot --output-as=xml | grep '<node name="{{ molecule_names[2] }}"' | grep -q 'online="false"'
+        executable: /bin/bash
+      register: molecule_offline
+      changed_when: false
+      until: molecule_offline.rc == 0
+      retries: 60
+      delay: 2
+      when: inventory_hostname == molecule_first
+
+    - name: Refused with a peer offline
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: peer offline
+        molecule_args: []
+        molecule_expect: fail
+
+    - name: The refusal names the offline peer
+      ansible.builtin.assert:
+        that: molecule_run.stdout is search(molecule_names[0] ~ ' not upgraded: ' ~ molecule_names[2] ~ ' not Online or in standby. Nothing changed.')
+        fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
+      run_once: true
+
+    - name: Nothing upgraded with a peer offline
+      ansible.builtin.shell:
+        cmd: dpkg-query -W -f='${Version}' molecule-cluster-tool; echo " $(crm_attribute --node {{ molecule_names[0] }} --name standby --query --quiet 2>/dev/null)"
+      register: molecule_first_state
+      changed_when: false
+      failed_when: molecule_first_state.stdout | trim not in ['1.0', '1.0 off']
+      when: inventory_hostname == molecule_first
+
+    - name: The peer's stack started again  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - start
+          - pacemaker
+      changed_when: true
+      when: inventory_hostname == groups['nodes'][2]
+
+    - name: Every node online again
+      ansible.builtin.include_tasks: ../../shared/online.yml
+
+    - name: Refused with a listed node not in the cluster
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: unknown node listed
+        molecule_args:
+          - -e
+          - "{{ {'pacemaker_upgrade_nodes': molecule_names + ['pacemaker-x']} | to_json }}"
+        molecule_expect: fail
+
+    - name: The refusal names the unknown node
+      ansible.builtin.assert:
+        that: molecule_run.stdout is search('pacemaker-x not Online or in standby. Nothing changed.')
+        fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
+      run_once: true
+
+    - name: Read the cluster before the upgrade
+      ansible.builtin.include_tasks: ../state.yml
+
+    - name: Nothing upgraded yet, molecule-moving on its preferred node
+      ansible.builtin.assert:
+        that:
+          - molecule_pkgs.stdout_lines == molecule_untouched
+          - molecule_standby.stdout == ''
+          - molecule_where.stdout is search('running on: ' ~ molecule_names[0] ~ '$')
+        fail_msg: "{{ molecule_pkgs.stdout_lines }} standby: {{ molecule_standby.stdout_lines }} {{ molecule_where.stdout }}"
+
+    - name: The first node upgraded alone
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: first node
+        molecule_args:
+          - --limit
+          - "{{ molecule_first }}"
+        molecule_expect: ok
+
+    # The other nodes' operation history survives: the resource stopped on one of them when it came back
+    - name: Molecule-moving ran on another node meanwhile
+      ansible.builtin.command:
+        argv:
+          - cibadmin
+          - --query
+          - --xpath
+          - >-
+            //node_state[@uname!='{{ molecule_names[0] }}']//lrm_resource[@id='molecule-moving']/lrm_rsc_op[@operation='stop'
+            and @rc-code='0']
+      changed_when: false
+      run_once: true
+
+    - name: Read the cluster after the first node
+      ansible.builtin.include_tasks: ../state.yml
+
+    - name: The first node upgraded with its stack stopped, back, molecule-moving back on it; the others untouched
+      ansible.builtin.assert:
+        that:
+          - >-
+            molecule_pkgs.stdout_lines == (['molecule-cluster-tool=2.0', 'other-molecule-cluster-tool=1.0', 'stack=2.0,inactive,inactive']
+            if inventory_hostname == molecule_first else molecule_untouched)
+          - molecule_standby.stdout == ''
+          - molecule_where.stdout is search('running on: ' ~ molecule_names[0] ~ '$')
+        fail_msg: "{{ molecule_pkgs.stdout_lines }} standby: {{ molecule_standby.stdout_lines }} {{ molecule_where.stdout }}"
+
+    - name: Every node online after the first
+      ansible.builtin.include_tasks: ../../shared/online.yml
+
+    - name: The whole cluster
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: every node
+        molecule_args: []
+        molecule_expect: ok
+
+    - name: The first node, already upgraded, untouched; the others upgraded
+      ansible.builtin.assert:
+        that:
+          - molecule_run.stdout is search(molecule_first ~ ' +: ok=[0-9]+ +changed=0 ')
+          - molecule_run.stdout is search(molecule_names[0] ~ ': no cluster package to upgrade')
+          - molecule_run.stdout | regex_findall(' changed=0 ') | length == 1
+        fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
+      run_once: true
+
+    - name: Read the cluster after every node
+      ansible.builtin.include_tasks: ../state.yml
+
+    - name: Every node upgraded with its stack stopped, none in standby
+      ansible.builtin.assert:
+        that:
+          - molecule_pkgs.stdout_lines == ['molecule-cluster-tool=2.0', 'other-molecule-cluster-tool=1.0', 'stack=2.0,inactive,inactive']
+          - molecule_standby.stdout == ''
+          - molecule_where.stdout is search('running on: ' ~ molecule_names[0] ~ '$')
+        fail_msg: "{{ molecule_pkgs.stdout_lines }} standby: {{ molecule_standby.stdout_lines }} {{ molecule_where.stdout }}"
+
+    - name: Every node online after the upgrade
+      ansible.builtin.include_tasks: ../../shared/online.yml
+
+    - name: A rerun with nothing pending
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: rerun
+        molecule_args: []
+        molecule_expect: ok
+
+    - name: Nothing changed, no standby
+      ansible.builtin.assert:
+        that:
+          - molecule_run.stdout | regex_findall(' changed=0 ') | length == groups['nodes'] | length
+          - molecule_run.stdout | regex_findall(': no cluster package to upgrade') | length == groups['nodes'] | length
+          - molecule_run.stdout is not search('Standby, the resources move')
+        fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
+      run_once: true
+
+    # A stop that outlasts the timeout: the node is left in standby with its stack and packages as they were
+    - name: Version 3.0 is published
+      ansible.builtin.include_tasks: ../publish.yml
+      vars:
+        molecule_version: "3.0"
+
+    - name: Molecule-moving takes 30 s for each operation
+      ansible.builtin.command:
+        argv:
+          - crm_resource
+          - --resource
+          - molecule-moving
+          - --set-parameter
+          - op_sleep
+          - --parameter-value
+          - "30"
+      changed_when: true
+      run_once: true
+
+    - name: The cluster settles
+      ansible.builtin.command:
+        argv:
+          - crm_resource
+          - --wait
+          - --timeout
+          - 240s
+      changed_when: false
+      run_once: true
+
+    - name: A stop slower than the timeout
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: timeout
+        molecule_args:
+          - --limit
+          - "{{ molecule_first }}"
+          - -e
+          - pacemaker_upgrade_timeout=5
+        molecule_expect: fail
+
+    - name: The failure says the node still runs a resource and is left in standby
+      ansible.builtin.assert:
+        that: molecule_run.stdout is search(molecule_names[0] ~ ' still runs 1 resource\(s\) after 5 s in standby: left in standby')
+        fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
+      run_once: true
+
+    - name: Read the cluster after the timeout
+      ansible.builtin.include_tasks: ../state.yml
+
+    - name: The first node in standby, its stack up, nothing upgraded
+      ansible.builtin.assert:
+        that:
+          - molecule_pkgs.stdout_lines == ['molecule-cluster-tool=2.0', 'other-molecule-cluster-tool=1.0', 'stack=2.0,inactive,inactive']
+          - molecule_standby.stdout_lines == [molecule_names[0]]
+        fail_msg: "{{ molecule_pkgs.stdout_lines }} standby: {{ molecule_standby.stdout_lines }}"
+
+    - name: Corosync and pacemaker still run on the first node
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - corosync
+          - pacemaker
+      changed_when: false
+      when: inventory_hostname == molecule_first
