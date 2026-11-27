@@ -47,6 +47,7 @@
       - systemctl
       - stop
       - pacemaker
+      - corosync
   changed_when: true
 
 - name: The stack is stopped
