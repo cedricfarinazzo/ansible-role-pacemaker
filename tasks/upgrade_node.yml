@@ -108,7 +108,7 @@
       - "{{ __pacemaker_upgrade_node.stdout }}"
       - --name
       - standby
-      - --query
+      - --delete
   changed_when: true
 
 - name: Wait until this node is Online, out of standby
