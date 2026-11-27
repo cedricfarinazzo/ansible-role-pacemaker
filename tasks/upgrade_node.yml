@@ -55,7 +55,7 @@
     argv: "{{ ['systemctl', 'is-active'] + __pacemaker_upgrade_units }}"
   register: __pacemaker_upgrade_down
   changed_when: false
-  failed_when: __pacemaker_upgrade_down.stdout_lines | reject('equalto', 'inactive') | list | length > 0
+  failed_when: __pacemaker_upgrade_down.stdout_lines | select('equalto', 'active') | list | length > 0
 
 # The stack stopped first: the maintainer scripts find nothing running to restart
 - name: Upgrade the cluster packages

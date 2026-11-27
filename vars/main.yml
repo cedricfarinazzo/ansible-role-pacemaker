@@ -42,7 +42,7 @@ __pacemaker_upgrade_peers: >-
      | reject('equalto', __pacemaker_upgrade_node.stdout) | list }}
 __pacemaker_upgrade_ready: >-
   {{ __pacemaker_upgrade_lines | select('search', ' online="true"') | select('search', ' standby="false"')
-     | map('regex_replace', __pacemaker_upgrade_name_re, '\\1') | list }}
+     | map('regex_replace', __pacemaker_upgrade_name_re, '\1') | list }}
 # apt list --upgradable: name/suite version arch [upgradable from: ...]; the names a pattern matches from the start
 __pacemaker_upgrade_pending: >-
   {{ __pacemaker_upgrade_apt.stdout_lines | select('search', '/') | map('regex_replace', '/.*', '')

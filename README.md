@@ -185,7 +185,7 @@ crm_attribute --node "$(crm_node -n)" --name standby --delete
 2. runs `apt-get update` and lists the upgradable packages whose name a `pacemaker_upgrade_patterns` entry matches from its start; none: nothing else happens (no standby);
 3. in check mode, names those packages (reported as changed) and stops there;
 4. puts the node in standby and waits until no resource runs on it;
-5. stops `pacemaker` and `corosync` in one command (never `pacemaker` alone) and checks `corosync`, `corosync-qdevice`, `pacemaker` and `sbd` inactive;
+5. stops `pacemaker` and `corosync` in one command (never `pacemaker` alone) and checks none of `corosync`, `corosync-qdevice`, `pacemaker` and `sbd` still active;
 6. runs `apt-get install --only-upgrade -o Dpkg::Options::=--force-confold` on exactly those packages, then checks `dpkg --audit` prints nothing;
 7. starts `pacemaker` (and `corosync-qdevice` when it ran before), waits until every unit that ran before runs again;
 8. deletes the standby attribute and waits until the node is Online.

@@ -23,7 +23,8 @@
 
     - name: Check mode names each node's packages
       ansible.builtin.assert:
-        that: molecule_run.stdout is search(item ~ ': would upgrade molecule-cluster-tool"')
+        that: >-
+          molecule_run.stdout is search(item ~ ': would upgrade molecule-cluster-tool"')
         fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
       loop: "{{ molecule_names }}"
       run_once: true
@@ -60,7 +61,8 @@
 
     - name: The refusal names the peer
       ansible.builtin.assert:
-        that: molecule_run.stdout is search(molecule_names[0] ~ ' not upgraded: ' ~ molecule_names[1] ~ ' not Online or in standby. Nothing changed.')
+        that: >-
+          molecule_run.stdout is search(molecule_names[0] ~ ' not upgraded: ' ~ molecule_names[1] ~ ' not Online or in standby. Nothing changed.')
         fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
       run_once: true
 
@@ -116,7 +118,8 @@
 
     - name: The refusal names the offline peer
       ansible.builtin.assert:
-        that: molecule_run.stdout is search(molecule_names[0] ~ ' not upgraded: ' ~ molecule_names[2] ~ ' not Online or in standby. Nothing changed.')
+        that: >-
+          molecule_run.stdout is search(molecule_names[0] ~ ' not upgraded: ' ~ molecule_names[2] ~ ' not Online or in standby. Nothing changed.')
         fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
       run_once: true
 
@@ -163,7 +166,8 @@
         that:
           - molecule_pkgs.stdout_lines == molecule_untouched
           - molecule_standby.stdout == ''
-          - molecule_where.stdout is search('running on: ' ~ molecule_names[0] ~ '$')
+          - >-
+            molecule_where.stdout is search('running on: ' ~ molecule_names[0] ~ '$')
         fail_msg: "{{ molecule_pkgs.stdout_lines }} standby: {{ molecule_standby.stdout_lines }} {{ molecule_where.stdout }}"
 
     - name: The first node upgraded alone
@@ -198,7 +202,8 @@
             molecule_pkgs.stdout_lines == (['molecule-cluster-tool=2.0', 'other-molecule-cluster-tool=1.0', 'stack=2.0,inactive,inactive']
             if inventory_hostname == molecule_first else molecule_untouched)
           - molecule_standby.stdout == ''
-          - molecule_where.stdout is search('running on: ' ~ molecule_names[0] ~ '$')
+          - >-
+            molecule_where.stdout is search('running on: ' ~ molecule_names[0] ~ '$')
         fail_msg: "{{ molecule_pkgs.stdout_lines }} standby: {{ molecule_standby.stdout_lines }} {{ molecule_where.stdout }}"
 
     - name: Every node online after the first
@@ -214,8 +219,10 @@
     - name: The first node, already upgraded, untouched; the others upgraded
       ansible.builtin.assert:
         that:
-          - molecule_run.stdout is search(molecule_first ~ ' +: ok=[0-9]+ +changed=0 ')
-          - molecule_run.stdout is search(molecule_names[0] ~ ': no cluster package to upgrade')
+          - >-
+            molecule_run.stdout is search(molecule_first ~ ' +: ok=[0-9]+ +changed=0 ')
+          - >-
+            molecule_run.stdout is search(molecule_names[0] ~ ': no cluster package to upgrade')
           - molecule_run.stdout | regex_findall(' changed=0 ') | length == 1
         fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
       run_once: true
@@ -228,7 +235,8 @@
         that:
           - molecule_pkgs.stdout_lines == ['molecule-cluster-tool=2.0', 'other-molecule-cluster-tool=1.0', 'stack=2.0,inactive,inactive']
           - molecule_standby.stdout == ''
-          - molecule_where.stdout is search('running on: ' ~ molecule_names[0] ~ '$')
+          - >-
+            molecule_where.stdout is search('running on: ' ~ molecule_names[0] ~ '$')
         fail_msg: "{{ molecule_pkgs.stdout_lines }} standby: {{ molecule_standby.stdout_lines }} {{ molecule_where.stdout }}"
 
     - name: Every node online after the upgrade
@@ -245,7 +253,8 @@
       ansible.builtin.assert:
         that:
           - molecule_run.stdout | regex_findall(' changed=0 ') | length == groups['nodes'] | length
-          - molecule_run.stdout | regex_findall(': no cluster package to upgrade') | length == groups['nodes'] | length
+          - >-
+            molecule_run.stdout | regex_findall(': no cluster package to upgrade') | length == groups['nodes'] | length
           - molecule_run.stdout is not search('Standby, the resources move')
         fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
       run_once: true
@@ -292,7 +301,8 @@
 
     - name: The failure says the node still runs a resource and is left in standby
       ansible.builtin.assert:
-        that: molecule_run.stdout is search(molecule_names[0] ~ ' still runs 1 resource\(s\) after 5 s in standby: left in standby')
+        that: >-
+          molecule_run.stdout is search(molecule_names[0] ~ ' still runs 1 resource[(]s[)] after 5 s in standby: left in standby')
         fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
       run_once: true
 
