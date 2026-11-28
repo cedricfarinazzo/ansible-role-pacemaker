@@ -1,6 +1,6 @@
 ---
 # The rolling upgrade (tasks_from: upgrade.yml) from a serial: 1, any_errors_fatal play: check mode, refusals before
-# any change, one node upgraded (its resource moves away and back), the rest, a rerun, a stop that outlasts the timeout.
+# any change, one node upgraded (its resource moves away and back), the rest, a rerun, a stop that outlasts the timeout, a dpkg --audit finding.
 - name: Rolling upgrade
   hosts: nodes
   gather_facts: false
@@ -325,3 +325,105 @@
           - pacemaker
       changed_when: false
       when: inventory_hostname == molecule_first
+
+    # A dpkg --audit finding after the package upgrade: the node is left in standby with its stack stopped
+    - name: The first node out of standby
+      ansible.builtin.command:
+        argv:
+          - crm_attribute
+          - --node
+          - "{{ molecule_names[0] }}"
+          - --name
+          - standby
+          - --delete
+      changed_when: true
+      run_once: true
+
+    - name: Every node online before the audit case
+      ansible.builtin.include_tasks: ../../shared/online.yml
+
+    # Installed without its files list: apt ignores it, dpkg --audit reports it
+    - name: A package dpkg --audit reports on the last node
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          d=$(mktemp -d)
+          mkdir -p "$d/DEBIAN"
+          printf 'Package: molecule-audit-seed\nVersion: 1.0\nArchitecture: all\nMaintainer: Molecule <molecule@example.com>\nDescription: stand-in\n' \
+            > "$d/DEBIAN/control"
+          dpkg-deb --build --root-owner-group "$d" /tmp/molecule-audit-seed.deb > /dev/null
+          rm -rf "$d"
+          dpkg -i /tmp/molecule-audit-seed.deb > /dev/null
+          rm /var/lib/dpkg/info/molecule-audit-seed.list
+          test -n "$(dpkg --audit)"
+      changed_when: true
+      when: inventory_hostname == groups['nodes'][2]
+
+    - name: The last node upgraded with a dpkg --audit finding
+      ansible.builtin.include_tasks: ../../shared/recap.yml
+      vars:
+        molecule_label: dpkg audit
+        molecule_args:
+          - --limit
+          - "{{ groups['nodes'][2] }}"
+        molecule_expect: fail
+
+    - name: The run fails on the audit, never starts the stack
+      ansible.builtin.assert:
+        that:
+          - >-
+            molecule_run.stdout is search('fatal: \\[' ~ groups['nodes'][2] ~ '\\]: FAILED! => [^\\n]*"cmd": \\["dpkg", "--audit"\\]')
+          - molecule_run.stdout is search('molecule-audit-seed')
+          - molecule_run.stdout is not search('TASK [^\n]*Start the stack')
+        fail_msg: "{{ molecule_run.stdout_lines[-40:] }}"
+      run_once: true
+
+    - name: Read the cluster after the audit failure
+      ansible.builtin.include_tasks: ../state.yml
+
+    - name: The last node upgraded, its stack stopped, left in standby
+      ansible.builtin.assert:
+        that:
+          - >-
+            molecule_pkgs.stdout_lines == (['molecule-cluster-tool=3.0', 'other-molecule-cluster-tool=1.0', 'stack=3.0,inactive,inactive']
+            if inventory_hostname == groups['nodes'][2] else
+            ['molecule-cluster-tool=2.0', 'other-molecule-cluster-tool=1.0', 'stack=2.0,inactive,inactive'])
+          - molecule_standby.stdout_lines == [molecule_names[2]]
+        fail_msg: "{{ molecule_pkgs.stdout_lines }} standby: {{ molecule_standby.stdout_lines }}"
+
+    - name: Corosync and pacemaker stay stopped on the last node
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - corosync
+          - pacemaker
+      register: molecule_audit_units
+      changed_when: false
+      failed_when: molecule_audit_units.stdout_lines != ['inactive', 'inactive']
+      when: inventory_hostname == groups['nodes'][2]
+
+    - name: The finding repaired, the stack started again  # noqa: command-instead-of-module
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          dpkg --purge molecule-audit-seed > /dev/null 2>&1
+          test -z "$(dpkg --audit)"
+          systemctl start pacemaker
+      changed_when: true
+      when: inventory_hostname == groups['nodes'][2]
+
+    - name: The last node out of standby
+      ansible.builtin.command:
+        argv:
+          - crm_attribute
+          - --node
+          - "{{ molecule_names[2] }}"
+          - --name
+          - standby
+          - --delete
+      changed_when: true
+      run_once: true
+
+    - name: Every node online after the repair
+      ansible.builtin.include_tasks: ../../shared/online.yml

@@ -26,7 +26,7 @@ Public Ansible role `cedricfarinazzo.pacemaker` (Ansible Galaxy): Pacemaker on a
 - `molecule/resources-multi/` — three nodes, three primitives, every score kind: check mode (converged, a pending replace, pending removals), a parameter change (restart), a location moved and one removed, a hand edit undone, two removed together.
 - `molecule/resources-atomic/` — two nodes: a stopped primitive started and moved in one run, never started on the node it leaves; a status update forced between copy and patch, retried, written once.
 - `molecule/systemd/` — two nodes: ordering drop-ins byte for byte and as systemd reads them, stale and host drop-ins, lists changed without a restart, check mode, a real start through the wait on a stub `drbdsetup`, everything off, absent.
-- `molecule/upgrade/` — three nodes, a local apt repository (`publish.yml` builds stand-in packages, `state.yml` reads versions and standby) and `upgrade.yml`, the consumer play: check mode, refusals, one node then the rest, rerun, a stop slower than the timeout.
+- `molecule/upgrade/` — three nodes, a local apt repository (`publish.yml` builds stand-in packages, `state.yml` reads versions and standby) and `upgrade.yml`, the consumer play: check mode, refusals, one node then the rest, rerun, a stop slower than the timeout, a dpkg --audit finding (stack left stopped, in standby).
 - `molecule/failure/` — failure paths on a two-node cluster, then verify nothing changed.
 - `tests/validate.test.sh` — good and bad inputs against `tasks/validate.yml` and `tasks/upgrade_validate.yml` on localhost.
 - `tests/drbd-wait.test.sh` — `files/pacemaker-drbd-wait` against a stub `drbdsetup`.
